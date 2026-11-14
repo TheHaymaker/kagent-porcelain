@@ -48,7 +48,7 @@ gc() { gcloud --project "$PROJECT_ID" --quiet "$@"; }
 phase_check() {
   say "Checking tools and credentials"
   need gcloud; need kubectl; need helm; need go; need openssl; need python3
-  gcloud auth list --filter=status:ACTIVE --format='value(account)' | grep -q . || die "gcloud has no active account"
+  [[ -n $(gcloud auth list --filter=status:ACTIVE --format='value(account)') ]] || die "gcloud has no active account"
   # Projects created by some Google tools start with even these APIs off.
   # Turning them on changes nothing else, and needs serviceusage permission.
   gc services enable serviceusage.googleapis.com cloudresourcemanager.googleapis.com cloudbilling.googleapis.com ||
@@ -93,11 +93,16 @@ phase_infra() {
   fi
   kubeconfig
   say "Checking the certificate APIs Substrate needs"
+  # Capture first: grep -q exits at its first match, and with pipefail the
+  # SIGPIPE that kills kubectl would read as the resource being missing.
+  local served
+  served=$(kubectl api-resources --api-group certificates.k8s.io -o name) ||
+    die "cannot list the cluster's certificates.k8s.io resources"
   for r in clustertrustbundles podcertificaterequests; do
-    kubectl api-resources --api-group certificates.k8s.io -o name | grep -q "^$r" ||
+    grep -q "^$r\." <<<"$served" ||
       die "the cluster does not serve $r.certificates.k8s.io; Substrate cannot run here (see deploy/gcp/README.md)"
   done
-  echo "ok"
+  echo "ok: $(tr '\n' ' ' <<<"$served")"
 }
 
 # kubeconfig writes a kubeconfig from a short-lived gcloud access token, so the
