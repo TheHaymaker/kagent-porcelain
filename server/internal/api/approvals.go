@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -95,8 +97,16 @@ func (s *Server) ListSessionApprovals(ctx context.Context, req *wb.ListSessionAp
 		// Unknown sessions are learned from kagent; SyncSession refuses
 		// anyone but the owner.
 		if err := s.Approvals.SyncSession(ctx, c, req.GetSessionId()); err != nil {
-			if err == approval.ErrPermission || !owner && err != nil {
+			switch {
+			case errors.Is(err, approval.ErrPermission), status.Code(err) == codes.NotFound:
+				// Hide sessions the caller may not see.
 				return nil, status.Error(codes.NotFound, "not found")
+			case owner:
+				// The stored list is still useful; a push may catch up.
+				slog.WarnContext(ctx, "sync session approvals", "session", req.GetSessionId(), "error", err)
+			default:
+				slog.ErrorContext(ctx, "sync session approvals", "session", req.GetSessionId(), "error", err)
+				return nil, status.Error(codes.Unavailable, "could not read the session from kagent")
 			}
 		}
 	}

@@ -25,11 +25,16 @@ type fakeKagent struct {
 	tasks map[string]kagent.Task
 	sent  []sent
 	fail  error
+
+	sessionReads []string
 }
 
 func (f *fakeKagent) Session(_ context.Context, as, id string) (kagent.SessionInfo, error) {
-	if as != identity.SystemPrincipal {
-		return kagent.SessionInfo{}, errors.New("session lookups must use the system principal")
+	// kagent lets a creator read their own session and the system principal
+	// list every creator's; anyone else sees nothing.
+	f.sessionReads = append(f.sessionReads, as)
+	if as != "alice" && as != identity.SystemPrincipal {
+		return kagent.SessionInfo{}, errors.New("not found")
 	}
 	return kagent.SessionInfo{ID: id, Agent: "workbench/builder", Creator: "alice"}, nil
 }
@@ -344,5 +349,19 @@ func TestSyncSessionFindsPausesWithoutPush(t *testing.T) {
 	list, _ := e.s.ListSessionApprovals(ctx, "ctx")
 	if len(list) != 1 || list[0].Kind != policy.DataDeletion {
 		t.Fatalf("%+v", list)
+	}
+}
+
+// kagent scopes session reads to their creator, so a requester's first sync
+// must read the session as the requester, not as the system principal.
+func TestSyncSessionReadsAsCreator(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	e.k.tasks["t10"] = kagent.Task{ID: "t10", ContextID: "fresh", State: hitl.StateInputRequired, Message: pause("t10", hitl.Tool{ID: "a", Name: "bigquery_delete_table"})}
+	if err := e.svc.SyncSession(ctx, alice, "fresh"); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.k.sessionReads) != 1 || e.k.sessionReads[0] != "alice" {
+		t.Fatalf("session reads: %v", e.k.sessionReads)
 	}
 }

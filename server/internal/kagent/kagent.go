@@ -15,7 +15,9 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	kagentv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"github.com/thehaymaker/kagent-porcelain/server/internal/hitl"
 )
@@ -89,16 +91,51 @@ func (b bearer) GetRequestMetadata(context.Context, ...string) (map[string]strin
 }
 func (bearer) RequireTransportSecurity() bool { return false }
 
-// Session implements Client.
+// Session implements Client. kagent scopes GetSession to the caller's own
+// sessions, so when asPrincipal is not the creator the lookup falls back to
+// listing every creator's sessions, which kagent allows only for principals
+// authorised for SessionAllCreators (Workbench's system principal is).
 func (l *Loopback) Session(ctx context.Context, as, sessionID string) (SessionInfo, error) {
-	resp, err := kagentv1.NewSessionServiceClient(l.conn).GetSession(ctx, &kagentv1.GetSessionRequest{SessionId: sessionID},
-		grpc.PerRPCCredentials(bearer{l.minter.Mint(as, "", "read-session")}))
-	if err != nil {
+	creds := grpc.PerRPCCredentials(bearer{l.minter.Mint(as, "", "read-session")})
+	svc := kagentv1.NewSessionServiceClient(l.conn)
+	resp, err := svc.GetSession(ctx, &kagentv1.GetSessionRequest{SessionId: sessionID}, creds)
+	if err == nil {
+		return sessionInfo(resp.GetSession()), nil
+	}
+	if c := status.Code(err); c != codes.NotFound && c != codes.PermissionDenied {
 		return SessionInfo{}, err
 	}
-	s := resp.GetSession()
+	token := ""
+	for range maxSessionPages {
+		list, lerr := svc.ListSessions(ctx, &kagentv1.ListSessionsRequest{AllCreators: true,
+			Page: &kagentv1.PageRequest{Limit: sessionPageSize, PageToken: token}}, creds)
+		if lerr != nil {
+			if status.Code(lerr) == codes.PermissionDenied {
+				return SessionInfo{}, err
+			}
+			return SessionInfo{}, fmt.Errorf("list sessions: %w", lerr)
+		}
+		for _, s := range list.GetSessions() {
+			if s.GetId() == sessionID {
+				return sessionInfo(s), nil
+			}
+		}
+		token = list.GetPage().GetNextPageToken()
+		if token == "" {
+			break
+		}
+	}
+	return SessionInfo{}, err
+}
+
+const (
+	sessionPageSize = 100
+	maxSessionPages = 50
+)
+
+func sessionInfo(s *kagentv1.Session) SessionInfo {
 	ref := s.GetAgent().GetRef()
-	return SessionInfo{ID: s.GetId(), Agent: ref.GetNamespace() + "/" + ref.GetName(), Creator: s.GetCreator(), Name: s.GetName()}, nil
+	return SessionInfo{ID: s.GetId(), Agent: ref.GetNamespace() + "/" + ref.GetName(), Creator: s.GetCreator(), Name: s.GetName()}
 }
 
 // interceptor attaches the delegation token and activates HITL.

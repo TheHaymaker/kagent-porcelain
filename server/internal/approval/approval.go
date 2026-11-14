@@ -74,7 +74,7 @@ func (s *Service) Observe(ctx context.Context, o Observation) error {
 	if o.SessionID == "" || o.TaskID == "" {
 		return fmt.Errorf("%w: observation needs a session and a task", ErrInvalid)
 	}
-	ws, err := s.session(ctx, o.SessionID)
+	ws, err := s.session(ctx, "", o.SessionID)
 	if err != nil {
 		return err
 	}
@@ -227,7 +227,11 @@ func (s *Service) taskEnded(ctx context.Context, ws store.WatchedSession, o Obse
 
 // session returns the recorded session, learning it from kagent the first
 // time. kagent is asked as the system principal, which may read every session.
-func (s *Service) session(ctx context.Context, sessionID string) (store.WatchedSession, error) {
+// session returns the watched session, discovering it from kagent on first
+// sight. as is the principal to read it as: a caller who created the session
+// can read it directly; anyone else (including the system principal on the
+// push path) relies on kagent's all-creators listing.
+func (s *Service) session(ctx context.Context, as, sessionID string) (store.WatchedSession, error) {
 	ws, err := s.Store.GetWatchedSession(ctx, sessionID)
 	if err == nil {
 		return ws, nil
@@ -235,7 +239,15 @@ func (s *Service) session(ctx context.Context, sessionID string) (store.WatchedS
 	if !errors.Is(err, store.ErrNotFound) {
 		return ws, err
 	}
-	info, err := s.Kagent.Session(ctx, identity.SystemPrincipal, sessionID)
+	if as == "" {
+		as = identity.SystemPrincipal
+	}
+	info, err := s.Kagent.Session(ctx, as, sessionID)
+	if err != nil && as != identity.SystemPrincipal {
+		// The caller may not be the creator (an approver opening the session
+		// first). Discover it as the system; callers still check mayView.
+		info, err = s.Kagent.Session(ctx, identity.SystemPrincipal, sessionID)
+	}
 	if err != nil {
 		return ws, fmt.Errorf("look up session %s: %w", sessionID, err)
 	}
@@ -247,7 +259,7 @@ func (s *Service) session(ctx context.Context, sessionID string) (store.WatchedS
 // indirectly (through ListSessionApprovals), so an approval exists the moment
 // anyone looks, even if a push notification is late or was never registered.
 func (s *Service) Sync(ctx context.Context, caller identity.Caller, sessionID, taskID string) error {
-	ws, err := s.session(ctx, sessionID)
+	ws, err := s.session(ctx, caller.ID, sessionID)
 	if err != nil {
 		return err
 	}
@@ -272,7 +284,7 @@ func (s *Service) Sync(ctx context.Context, caller identity.Caller, sessionID, t
 // SyncSession observes every paused task in a session. The approval list a
 // client reads is therefore current even when no push notification arrived.
 func (s *Service) SyncSession(ctx context.Context, caller identity.Caller, sessionID string) error {
-	ws, err := s.session(ctx, sessionID)
+	ws, err := s.session(ctx, caller.ID, sessionID)
 	if err != nil {
 		return err
 	}
