@@ -1,0 +1,89 @@
+name: deploy
+
+# Runs deploy/gcp/up.sh against a GCP test project, one phase at a time.
+# Uses the service account key stored as a secret on the "deploy" environment.
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: up.sh phase
+        type: choice
+        options: [check, infra, images, kagent, workbench, smoke, all, status, down]
+        default: check
+      project_id:
+        description: GCP project
+        default: gen-lang-client-0163423705
+      region:
+        description: GCP region
+        default: us-central1
+      secret_name:
+        description: Name of the deploy environment secret holding the service account JSON key
+        default: GCP_SA_KEY
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.project_id }}
+  cancel-in-progress: false
+
+jobs:
+  up:
+    name: up.sh ${{ inputs.phase }}
+    runs-on: ubuntu-latest
+    environment: deploy
+    timeout-minutes: 120
+    env:
+      PROJECT_ID: ${{ inputs.project_id }}
+      REGION: ${{ inputs.region }}
+      STATE_BUCKET: gs://${{ inputs.project_id }}-workbench-state
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Service account key is present
+        env:
+          KEY: ${{ secrets[inputs.secret_name] }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::No secret named '${{ inputs.secret_name }}' on the deploy environment. Re-run with secret_name set to the secret's name."
+            exit 1
+          fi
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets[inputs.secret_name] }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - uses: azure/setup-helm@v4
+      - uses: azure/setup-kubectl@v4
+
+      - name: Python YAML
+        run: python3 -c "import yaml" 2>/dev/null || pip install pyyaml
+
+      # up.sh keeps generated secrets (internal key, push signing key, the
+      # smoke test's signing key) in deploy/gcp/.state. Runners keep nothing,
+      # so the state lives in a private bucket in the test project.
+      - name: Restore deploy state
+        if: inputs.phase != 'check'
+        run: |
+          gcloud storage buckets describe "$STATE_BUCKET" >/dev/null 2>&1 ||
+            gcloud storage buckets create "$STATE_BUCKET" --project "$PROJECT_ID" --location "$REGION" \
+              --uniform-bucket-level-access --public-access-prevention
+          mkdir -p deploy/gcp/.state/secrets
+          gcloud storage rsync -r "$STATE_BUCKET/secrets" deploy/gcp/.state/secrets 2>/dev/null || true
+
+      - name: up.sh ${{ inputs.phase }}
+        run: deploy/gcp/up.sh ${{ inputs.phase }}
+
+      - name: Save deploy state
+        if: always() && inputs.phase != 'check'
+        run: |
+          if [ -d deploy/gcp/.state/secrets ]; then
+            gcloud storage rsync -r deploy/gcp/.state/secrets "$STATE_BUCKET/secrets"
+          fi
