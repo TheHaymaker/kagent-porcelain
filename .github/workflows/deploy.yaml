@@ -17,8 +17,8 @@ on:
         description: GCP region
         default: us-central1
       secret_name:
-        description: Name of the deploy environment secret holding the service account JSON key
-        default: GCP_SA_KEY_JSON
+        description: Name of the Actions secret holding the service account key (JSON or base64 of it)
+        default: GCP_SA_KEY_B64
 
 permissions:
   contents: read
@@ -40,20 +40,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Service account key is present
+      # The secret may hold the JSON key itself or the key base64-encoded.
+      # It is written to a private file on the runner and never printed.
+      - name: Service account key
         env:
-          KEY: ${{ secrets[inputs.secret_name] || secrets.GCP_SA_KEY_JSON }}
+          KEY: ${{ secrets[inputs.secret_name] || secrets.GCP_SA_KEY_B64 || secrets.GCP_SA_KEY_JSON }}
         run: |
           if [ -z "$KEY" ]; then
-            echo "::error::No secret named '${{ inputs.secret_name }}' on the deploy environment. Re-run with secret_name set to the secret's name."
+            echo "::error::No secret named '${{ inputs.secret_name }}' is visible to this job. Add it under Settings > Secrets and variables > Actions."
             exit 1
           fi
-
-      - uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets[inputs.secret_name] || secrets.GCP_SA_KEY_JSON }}
+          umask 077
+          key_file="$RUNNER_TEMP/gcp-sa-key.json"
+          case "$KEY" in
+            "{"*) printf '%s' "$KEY" > "$key_file" ;;
+            *) printf '%s' "$KEY" | base64 -d > "$key_file" ;;
+          esac
+          python3 -c 'import json,sys; k=json.load(open(sys.argv[1])); assert k.get("type")=="service_account" and k.get("private_key"), "not a service account key"; print("Service account:", k["client_email"])' "$key_file"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$key_file" >> "$GITHUB_ENV"
 
       - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Sign gcloud in
+        run: gcloud auth activate-service-account --key-file "$GOOGLE_APPLICATION_CREDENTIALS" --quiet
 
       - uses: actions/setup-go@v5
         with:
@@ -87,3 +96,7 @@ jobs:
           if [ -d deploy/gcp/.state/secrets ]; then
             gcloud storage rsync -r deploy/gcp/.state/secrets "$STATE_BUCKET/secrets"
           fi
+
+      - name: Remove the key file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/gcp-sa-key.json"
