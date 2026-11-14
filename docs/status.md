@@ -1,8 +1,27 @@
 # Status against the PRD
 
 As of 14 Nov 2026, built against kagent v1.0.1 (558e3d7). "Tested" means automated
-tests in this repository pass; nothing has run on a cluster yet, because
-phase 1 (Substrate and kagent on GKE) has not happened.
+tests in this repository pass.
+
+## On a real cluster
+
+`deploy/gcp/up.sh all` (run from the `deploy` workflow) brings up a GKE
+Standard cluster, Substrate 1.0.0, stock kagent 1.0.1 and then Workbench in
+place of kagent's controller, and runs `workbench-smoke` against it. On
+14 Nov 2026 (commit 62d8435) all eight checks passed:
+
+1. Alice and Bob sign in with company tokens and get their roles.
+2. Alice's conversation with a scripted agent pauses on kagent's HITL
+   extension when the agent asks to promote an app to production.
+3. That pause is an approval Alice may not decide.
+4. The server refuses Alice's own approval.
+5. Bob finds it in his inbox and approves it.
+6. The decision reaches the task, which resumes and completes.
+7. The audit trail records the request, Bob's decision for Alice, and delivery.
+8. kagent's signed push notification arrives and Alice is told the task finished.
+
+The model is a scripted mock (`workbench-mockllm`) and the deployer is the
+log deployer; no real LLM, GitLab or Cloud Run has been exercised yet.
 
 ## Requirements
 
@@ -34,10 +53,9 @@ phase 1 (Substrate and kagent on GKE) has not happened.
 
 ## Not yet done, in order of importance
 
-1. **Phase 1 on a real cluster.** Install Substrate and kagent on GKE, then
-   the Workbench image with `deploy/helm/values-workbench.yaml`, and take one
-   scaffold from request to a Cloud Run preview. Nothing here has met a real
-   kagent API server, Substrate, GitLab or Google API.
+1. **A real app end to end.** The cluster, kagent and the approval loop are
+   proven (above); next is a real model, GitLab and a scaffold taken from
+   request to a Cloud Run preview with the Cloud Run deployer.
 2. **The A2UI DataPart spike.** Does kagent pass an agent's DataParts through
    intact? The tool-result carrier works either way.
 3. **Approval proof for preview-level always-ask tools** (ADR 0002 known gap).
