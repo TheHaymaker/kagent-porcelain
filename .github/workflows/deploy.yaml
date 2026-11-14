@@ -16,6 +16,9 @@ on:
       region:
         description: GCP region
         default: us-central1
+      tag:
+        description: "Image tag to deploy; empty means the commit's short SHA. Set it to reuse images built by an earlier run."
+        default: ""
       secret_name:
         description: Name of the Actions secret holding the service account key (JSON or base64 of it)
         default: GCP_SA_KEY_B64
@@ -88,7 +91,11 @@ jobs:
           gcloud storage rsync -r "$STATE_BUCKET/secrets" deploy/gcp/.state/secrets 2>/dev/null || true
 
       - name: up.sh ${{ inputs.phase }}
-        run: deploy/gcp/up.sh ${{ inputs.phase }}
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then export TAG="$INPUT_TAG"; fi
+          deploy/gcp/up.sh ${{ inputs.phase }}
 
       - name: Save deploy state
         if: always() && inputs.phase != 'check'
