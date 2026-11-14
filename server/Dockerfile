@@ -11,9 +11,16 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG CMD=workbench
-ARG VERSION=dev
+# The kagent release server/go.mod pins. kagent's controller refuses to start
+# when the chart's built-in harness images belong to another release, so the
+# embedded controller must report the release it is.
+ARG KAGENT_VERSION=v1.0.1
+ARG SUBSTRATE_VERSION=1.0.0
 RUN test -d "cmd/${CMD}" || (echo "CMD must be one of: $(ls cmd)" >&2; exit 1)
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/${CMD}
+RUN v=github.com/kagent-dev/kagent/go/core/internal/version && \
+    CGO_ENABLED=0 go build -trimpath \
+      -ldflags="-s -w -X $v.Version=${KAGENT_VERSION} -X $v.SubstrateVersion=${SUBSTRATE_VERSION}" \
+      -o /out/app ./cmd/${CMD}
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/app /app
