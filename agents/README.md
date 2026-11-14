@@ -7,7 +7,7 @@ pushes them to GitLab, deploys previews to Cloud Run, and asks for production
 through a Workbench approval.
 
 Everything here targets the kagent `api.kagent.dev/v1alpha3` API at commit
-`eb42f64`. Every field used exists in `go/api/v1alpha3/*.go`; where the PRD
+`v1.0.1` (558e3d7; first written against eb42f64). Every field used exists in `go/api/v1alpha3/*.go`; where the PRD
 wanted something kagent cannot express, this README says so (see
 [Gaps](#what-kagent-cannot-express-today)).
 
@@ -220,7 +220,7 @@ is no deny rule, and only HTTP(S) origins (no SSH, so git uses HTTPS).
 
 ## What kagent cannot express today
 
-| PRD wish | Status in kagent v1alpha3 @ eb42f64 | What we did |
+| PRD wish | Status in kagent v1alpha3 @ v1.0.1 | What we did |
 | --- | --- | --- |
 | Per-tool approval (e.g. only `cloudrun_deploy_preview`) | `requireApproval` is per binding; Claude harness exposes whole servers and allows one binding per server | Gate the whole `cloudrun-mcp` server; Workbench classifies per tool; production is never an agent tool |
 | Restrict the builder to a subset of a server's tools | `tools:` is accepted but not enforced by the Claude harness ("Enforced selection of individual tools" is unimplemented) | Bind whole servers; tool servers must expose only preview-safe tools |
@@ -238,7 +238,7 @@ is no deny rule, and only HTTP(S) origins (no SSH, so git uses HTTPS).
 ## What was validated
 
 - All 13 `api.kagent.dev` objects (and the `kustomize build` output) validated
-  against the openAPIV3Schemas in `helm/kagent-crds` at eb42f64 (unknown fields,
+  against the openAPIV3Schemas in `helm/kagent-crds` at v1.0.1 (unknown fields,
   types, enums, patterns). CEL rules were checked by hand, not executed.
 - `kustomize build agents/` and `kustomize build agents/model-gateway/` render.
 - Every A2UI payload in `emitting-components` validated against

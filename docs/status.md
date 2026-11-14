@@ -1,6 +1,6 @@
 # Status against the PRD
 
-As of 14 Nov 2026, built against kagent eb42f64. "Tested" means automated
+As of 14 Nov 2026, built against kagent v1.0.1 (558e3d7). "Tested" means automated
 tests in this repository pass; nothing has run on a cluster yet, because
 phase 1 (Substrate and kagent on GKE) has not happened.
 

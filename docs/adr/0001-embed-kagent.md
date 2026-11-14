@@ -6,7 +6,7 @@ Workbench server replace kagent's controller, or run beside a stock one?"
 ## Decision
 
 `server/cmd/workbench` calls kagent's `app.Run` (go/core/pkg/app, kagent
-eb42f64) with every documented hook filled in:
+v1.0.1) with every documented hook filled in:
 
 | `app.Options` field | Workbench supplies |
 |---|---|
@@ -36,9 +36,11 @@ nothing bridges between them.
 - Workbench needs one listener kagent's options do not offer: an HTTP
   endpoint for push notifications and gateway usage. It runs in the same
   process on an internal port (`internal/hooks`, `:8090`), never exposed.
-- kagent's library surface is alpha. The version is pinned in `server/go.mod`;
-  upgrades go through a test cluster first. The code touches only the
+- kagent's library surface is alpha. The version is pinned in `server/go.mod`
+  to a kagent release (v1.0.1), so the Go library, the published Helm charts
+  and the Substrate version (1.0.0) all match; upgrades go through a test
+  cluster first. The code touches only the
   documented options and `go/core/pkg/*`.
-- Verified locally: the binary builds against kagent eb42f64, and against a
+- Verified locally: the binary builds against kagent v1.0.1 (558e3d7), and against a
   real PostgreSQL it applies kagent's 19 tables and Workbench's 17 in one
   migration run before stopping for lack of a Kubernetes cluster.
