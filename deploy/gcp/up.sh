@@ -165,6 +165,12 @@ kagent_cli() {
 kagent_install() {
   local cli; cli=$(kagent_cli)
   local provider=${MODEL_PROVIDER:-Ollama}
+  # kagent install insists on a key for every provider. With no real model
+  # configured, the default is an Ollama ModelConfig nobody calls (the smoke
+  # test brings its own scripted model), and Ollama does not check keys.
+  if [[ $provider == Ollama && -z ${OLLAMA_API_KEY:-} ]]; then
+    export OLLAMA_API_KEY=placeholder-no-model-configured
+  fi
   # The CLI config lists values files in order; later files win.
   # A CLI built from source has no release version, so the chart versions
   # are explicit.
