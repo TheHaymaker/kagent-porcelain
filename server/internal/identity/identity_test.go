@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -194,5 +197,31 @@ func TestUpstreamDoesNotForwardToken(t *testing.T) {
 	}
 	if r.Header.Get("Authorization") != "" || r.Header.Get("X-User-Id") == "" {
 		t.Fatalf("upstream headers %v", r.Header)
+	}
+}
+
+func TestKeysFromFile(t *testing.T) {
+	s := newSigner(t)
+	b, err := json.Marshal(s.set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "jwks.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ks := NewDiscoveryKeySet(context.Background(), nil)
+	is := Issuer{Kind: Company, URL: "https://smoke.workbench.test", Audiences: []string{"workbench"}, JWKSFile: path}
+	a, err := New([]Issuer{is}, ks, &fakeLinks{}, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := s.token(t, map[string]any{"iss": is.URL, "sub": "alice", "aud": "workbench", "exp": time.Now().Add(time.Hour).Unix(), "groups": []string{"requesters"}})
+	sess, err := a.Authenticate(context.Background(), header(tok), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := FromPrincipal(sess.Principal()).Groups; len(g) != 1 || g[0] != "requesters" {
+		t.Fatalf("groups %v", g)
 	}
 }

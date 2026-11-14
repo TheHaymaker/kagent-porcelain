@@ -29,6 +29,10 @@ func NewDiscoveryKeySet(ctx context.Context, client *http.Client) *DiscoveryKeyS
 
 // Keys returns the issuer's current key set.
 func (d *DiscoveryKeySet) Keys(ctx context.Context, is Issuer) (jwk.Set, error) {
+	if is.JWKSFile != "" {
+		// Read on every call so a rotated Secret takes effect without a restart.
+		return jwk.ReadFile(is.JWKSFile)
+	}
 	u, err := d.jwksURL(ctx, is)
 	if err != nil {
 		return nil, err

@@ -49,7 +49,11 @@ type Issuer struct {
 	URL       string     `json:"url" yaml:"url"`
 	Audiences []string   `json:"audiences" yaml:"audiences"`
 	// JWKSURL overrides discovery.
-	JWKSURL     string `json:"jwksUrl,omitempty" yaml:"jwksUrl,omitempty"`
+	JWKSURL string `json:"jwksUrl,omitempty" yaml:"jwksUrl,omitempty"`
+	// JWKSFile reads the keys from a file instead (a mounted Secret). It is
+	// for test issuers, such as the one the end-to-end smoke test signs with;
+	// real issuers publish their keys.
+	JWKSFile    string `json:"jwksFile,omitempty" yaml:"jwksFile,omitempty"`
 	EmailClaim  string `json:"emailClaim,omitempty" yaml:"emailClaim,omitempty"`
 	NameClaim   string `json:"nameClaim,omitempty" yaml:"nameClaim,omitempty"`
 	GroupsClaim string `json:"groupsClaim,omitempty" yaml:"groupsClaim,omitempty"`
