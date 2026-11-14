@@ -49,7 +49,23 @@ phase_check() {
   say "Checking tools and credentials"
   need gcloud; need kubectl; need helm; need go; need openssl; need python3
   gcloud auth list --filter=status:ACTIVE --format='value(account)' | grep -q . || die "gcloud has no active account"
+  # Projects created by some Google tools start with even these APIs off.
+  # Turning them on changes nothing else, and needs serviceusage permission.
+  gc services enable serviceusage.googleapis.com cloudresourcemanager.googleapis.com cloudbilling.googleapis.com ||
+    die "cannot enable APIs in $PROJECT_ID; the service account needs Owner, or Service Usage Admin, on the project"
   gc projects describe "$PROJECT_ID" --format='value(projectId)' >/dev/null || die "cannot read project $PROJECT_ID"
+  local billing account
+  billing=$(gcloud billing projects describe "$PROJECT_ID" --format='value(billingEnabled)' 2>/dev/null || echo unknown)
+  case $billing in
+    True) echo "billing: enabled" ;;
+    False) die "billing is not enabled on $PROJECT_ID; GKE, Cloud Build and Artifact Registry need it" ;;
+    *) echo "billing: could not check (the account may lack billing viewer); infra will fail if it is off" ;;
+  esac
+  account=$(gcloud auth list --filter=status:ACTIVE --format='value(account)')
+  echo "roles held by $account on $PROJECT_ID:"
+  gc projects get-iam-policy "$PROJECT_ID" --flatten='bindings[].members' \
+    --filter="bindings.members:serviceAccount:$account" --format='value(bindings.role)' 2>/dev/null | sed 's/^/  /' ||
+    echo "  (cannot read the project's IAM policy)"
   echo "project $PROJECT_ID, region $REGION, cluster $CLUSTER, namespace $NAMESPACE, tag $TAG"
   mkdir -p "$STATE"
 }
