@@ -381,7 +381,9 @@ func withToken(ctx context.Context, tok string) context.Context {
 	return context.WithValue(ctx, tokenKey{}, tok)
 }
 
-type authInterceptor struct{ a2aclient.PassthroughInterceptor }
+type authInterceptor struct {
+	a2aclient.PassthroughInterceptor
+}
 
 func (authInterceptor) Before(ctx context.Context, req *a2aclient.Request) (context.Context, any, error) {
 	if tok, ok := ctx.Value(tokenKey{}).(string); ok {
