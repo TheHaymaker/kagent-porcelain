@@ -19,7 +19,7 @@ steps:
     waitFor: ["-"]
   - id: web
     name: gcr.io/cloud-builders/docker
-    args: [build, -t, "${_REGISTRY}/workbench-web:${_TAG}", web]
+    args: [build, -f, web/Dockerfile, -t, "${_REGISTRY}/workbench-web:${_TAG}", "."]
     waitFor: ["-"]
   - id: gitlab-mcp
     name: gcr.io/cloud-builders/docker
