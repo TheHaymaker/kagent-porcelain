@@ -153,7 +153,11 @@ kagent_cli() {
     local src="$STATE/kagent-src"
     [[ -d $src ]] || git clone -q https://github.com/kagent-dev/kagent.git "$src"
     git -C "$src" fetch -q --depth 1 origin "$KAGENT_COMMIT" && git -C "$src" checkout -q "$KAGENT_COMMIT"
-    (cd "$src/go" && go build -o "$bin" ./core/cli/cmd/kagent) >&2
+    # Stamp the release the way kagent's own release build does; the
+    # installer refuses to run from a CLI that reports no release.
+    local v=github.com/kagent-dev/kagent/go/core/internal/version
+    (cd "$src/go" && go build -o "$bin" -ldflags "-X $v.Version=$KAGENT_CHART_VERSION \
+      -X $v.GitCommit=${KAGENT_COMMIT:0:7} -X $v.SubstrateVersion=$SUBSTRATE_CHART_VERSION" ./core/cli/cmd/kagent) >&2
   fi
   echo "$bin"
 }
