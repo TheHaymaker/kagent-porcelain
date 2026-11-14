@@ -121,8 +121,21 @@ KC
 
 phase_images() {
   say "Building images with Cloud Build ($REGISTRY, tag $TAG)"
-  gc builds submit "$ROOT" --region "$REGION" --config "$ROOT/deploy/gcp/cloudbuild.yaml" \
-    --substitutions "_REGISTRY=$REGISTRY,_TAG=$TAG"
+  # Streaming build logs needs Viewer on Google's default logs bucket, which
+  # an Editor account lacks; wait for the result instead and link the logs.
+  local id status
+  id=$(gc builds submit "$ROOT" --region "$REGION" --config "$ROOT/deploy/gcp/cloudbuild.yaml" \
+    --substitutions "_REGISTRY=$REGISTRY,_TAG=$TAG" --async --format='value(id)')
+  echo "build $id: https://console.cloud.google.com/cloud-build/builds;region=$REGION/$id?project=$PROJECT_ID"
+  while :; do
+    status=$(gc builds describe "$id" --region "$REGION" --format='value(status)')
+    case $status in
+      SUCCESS) echo "build succeeded"; break ;;
+      QUEUED|PENDING|WORKING) sleep 15 ;;
+      *) gc builds describe "$id" --region "$REGION" --format='yaml(status,statusDetail,failureInfo,steps[].id,steps[].status)'
+         die "image build $id ended as $status" ;;
+    esac
+  done
 }
 
 # kagent_cli builds the kagent CLI at the commit Workbench is built against.
