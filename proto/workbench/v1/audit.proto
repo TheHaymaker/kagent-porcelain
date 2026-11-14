@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package workbench.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "workbench/v1/common.proto";
+
+option go_package = "github.com/thehaymaker/kagent-porcelain/server/gen/workbench/v1;workbenchv1";
+
+// AuditService reads the record of what was asked, allowed, refused and done.
+// Entries are append-only; the same stream is exported to BigQuery.
+service AuditService {
+  rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse);
+}
+
+message AuditEvent {
+  string id = 1;
+  google.protobuf.Timestamp time = 2;
+  // e.g. approval.requested, approval.decided, app.registered, app.promoted.
+  string type = 3;
+  Person actor = 4;
+  // When the actor acted for someone else (a delegated decision).
+  Person on_behalf_of = 5;
+  string session_id = 6;
+  string task_id = 7;
+  string app_id = 8;
+  string approval_id = 9;
+  string summary = 10;
+  google.protobuf.Struct detail = 11;
+  string surface = 12;
+}
+
+message ListAuditEventsRequest {
+  string session_id = 1;
+  string app_id = 2;
+  string actor_id = 3;
+  string type_prefix = 4;
+  google.protobuf.Timestamp since = 5;
+  google.protobuf.Timestamp until = 6;
+  PageRequest page = 7;
+}
+
+message ListAuditEventsResponse {
+  repeated AuditEvent events = 1;
+  PageResponse page = 2;
+}

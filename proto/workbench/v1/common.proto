@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package workbench.v1;
+
+option go_package = "github.com/thehaymaker/kagent-porcelain/server/gen/workbench/v1;workbenchv1";
+
+// Person is a Workbench user as other people see them.
+message Person {
+  // Principal ID, as kagent's authenticator issues it.
+  string id = 1;
+  string email = 2;
+  string display_name = 3;
+}
+
+message PageRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message PageResponse {
+  string next_page_token = 1;
+}

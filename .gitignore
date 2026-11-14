@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.test
+/server/bin/
+.env
+.DS_Store
+coverage/
+__pycache__/
+.venv/

@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://workbench.dev/catalogs/workbench/v1/catalog.json",
+  "title": "Workbench component catalogue",
+  "description": "The A2UI (v0.9.1) components Workbench agents may emit. Every surface (web, Teams, iOS, Android) renders exactly these. Layout components follow the A2UI basic catalogue; domain components carry Workbench meaning. A string property may be a literal or a data binding {\"path\": \"/json/pointer\"}.",
+  "catalogId": "https://workbench.dev/catalogs/workbench/v1/catalog.json",
+  "a2uiVersion": "v0.9.1",
+  "$defs": {
+    "DynamicString": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "object", "properties": { "path": { "type": "string", "pattern": "^/" } }, "required": ["path"], "additionalProperties": false }
+      ]
+    },
+    "DynamicNumber": {
+      "oneOf": [
+        { "type": "number" },
+        { "type": "object", "properties": { "path": { "type": "string", "pattern": "^/" } }, "required": ["path"], "additionalProperties": false }
+      ]
+    },
+    "ComponentId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "Action": {
+      "type": "object",
+      "properties": {
+        "event": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "context": { "type": "object" }
+          },
+          "required": ["name"]
+        }
+      },
+      "required": ["event"]
+    },
+    "StepState": { "enum": ["pending", "running", "done", "failed", "skipped"] },
+    "Environment": { "enum": ["preview", "production"] }
+  },
+  "components": {
+    "Text": {
+      "description": "A run of text. Markdown is allowed in body variant.",
+      "properties": {
+        "text": { "$ref": "#/$defs/DynamicString" },
+        "variant": { "enum": ["h1", "h2", "h3", "body", "caption"] }
+      },
+      "required": ["text"]
+    },
+    "Column": {
+      "description": "Children stacked vertically.",
+      "properties": {
+        "children": { "type": "array", "items": { "$ref": "#/$defs/ComponentId" }, "maxItems": 50 },
+        "align": { "enum": ["start", "center", "end", "stretch"] }
+      },
+      "required": ["children"]
+    },
+    "Row": {
+      "description": "Children laid out horizontally; wraps on narrow surfaces.",
+      "properties": {
+        "children": { "type": "array", "items": { "$ref": "#/$defs/ComponentId" }, "maxItems": 20 },
+        "justify": { "enum": ["start", "center", "end", "spaceBetween"] },
+        "align": { "enum": ["start", "center", "end"] }
+      },
+      "required": ["children"]
+    },
+    "Card": {
+      "description": "A bordered container for one child.",
+      "properties": { "child": { "$ref": "#/$defs/ComponentId" } },
+      "required": ["child"]
+    },
+    "Divider": { "description": "A horizontal rule.", "properties": {}, "required": [] },
+    "Link": {
+      "description": "A link that opens in a new tab or the system browser. Only https URLs.",
+      "properties": {
+        "label": { "$ref": "#/$defs/DynamicString" },
+        "url": { "type": "string", "pattern": "^https://" }
+      },
+      "required": ["label", "url"]
+    },
+    "Button": {
+      "description": "Sends an action event back to the agent through Workbench.",
+      "properties": {
+        "label": { "$ref": "#/$defs/DynamicString" },
+        "variant": { "enum": ["primary", "secondary", "danger"] },
+        "action": { "$ref": "#/$defs/Action" }
+      },
+      "required": ["label", "action"]
+    },
+    "ApprovalCard": {
+      "description": "Points at a Workbench approval. The card's buttons, state and who may decide come from the ApprovalService, never from the agent, so an agent cannot draw an approval that the server would not honour.",
+      "properties": {
+        "approvalId": { "type": "string", "minLength": 1 },
+        "title": { "$ref": "#/$defs/DynamicString" },
+        "summary": { "$ref": "#/$defs/DynamicString" }
+      },
+      "required": ["approvalId"]
+    },
+    "Progress": {
+      "description": "A build's steps and where it has reached.",
+      "properties": {
+        "title": { "$ref": "#/$defs/DynamicString" },
+        "steps": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": { "type": "string" },
+              "state": { "$ref": "#/$defs/StepState" },
+              "detail": { "type": "string" }
+            },
+            "required": ["label", "state"]
+          }
+        },
+        "percent": { "$ref": "#/$defs/DynamicNumber" }
+      },
+      "required": ["steps"]
+    },
+    "DeployPreview": {
+      "description": "A deployment of an app to one environment, with a link to try it.",
+      "properties": {
+        "appId": { "type": "string" },
+        "appName": { "$ref": "#/$defs/DynamicString" },
+        "environment": { "$ref": "#/$defs/Environment" },
+        "url": { "type": "string", "pattern": "^https://" },
+        "revision": { "type": "string" },
+        "status": { "enum": ["deploying", "ready", "failed"] },
+        "logsUrl": { "type": "string", "pattern": "^https://" }
+      },
+      "required": ["appName", "environment", "status"]
+    },
+    "AppCard": {
+      "description": "An app from the registry. Clients refresh owner, status and URLs from the AppService by appId.",
+      "properties": {
+        "appId": { "type": "string", "minLength": 1 },
+        "name": { "$ref": "#/$defs/DynamicString" },
+        "description": { "$ref": "#/$defs/DynamicString" }
+      },
+      "required": ["appId"]
+    },
+    "CostSummary": {
+      "description": "What something cost, against a limit if one applies.",
+      "properties": {
+        "title": { "$ref": "#/$defs/DynamicString" },
+        "period": { "type": "string" },
+        "totalCents": { "$ref": "#/$defs/DynamicNumber" },
+        "limitCents": { "$ref": "#/$defs/DynamicNumber" },
+        "lines": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "properties": { "label": { "type": "string" }, "cents": { "type": "number" } },
+            "required": ["label", "cents"]
+          }
+        }
+      },
+      "required": ["totalCents"]
+    }
+  }
+}

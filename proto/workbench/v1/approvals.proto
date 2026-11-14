@@ -1,0 +1,194 @@
+syntax = "proto3";
+
+package workbench.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "workbench/v1/common.proto";
+
+option go_package = "github.com/thehaymaker/kagent-porcelain/server/gen/workbench/v1;workbenchv1";
+
+// ApprovalService is the one place approval rules live. Every surface draws
+// what it returns and sends decisions here; none decides anything itself.
+//
+// An approval wraps kagent's own pause on an A2A task. Deciding one sends the
+// HITL response into that same task, so the agent resumes where it stopped.
+service ApprovalService {
+  // ListInbox returns approvals the caller may decide, or approvals on the
+  // caller's own conversations.
+  rpc ListInbox(ListInboxRequest) returns (ListInboxResponse);
+  rpc GetApproval(GetApprovalRequest) returns (GetApprovalResponse);
+  rpc ListSessionApprovals(ListSessionApprovalsRequest) returns (ListSessionApprovalsResponse);
+  rpc Decide(DecideRequest) returns (DecideResponse);
+  // Reassign routes a pending approval to a named colleague.
+  rpc Reassign(ReassignRequest) returns (ReassignResponse);
+  rpc ListRememberedAnswers(ListRememberedAnswersRequest) returns (ListRememberedAnswersResponse);
+  rpc ForgetRememberedAnswer(ForgetRememberedAnswerRequest) returns (ForgetRememberedAnswerResponse);
+  // GetPolicy describes the always-ask action kinds and who approves them.
+  rpc GetPolicy(GetPolicyRequest) returns (GetPolicyResponse);
+}
+
+// ActionKind classifies a pending tool call. The non-ordinary kinds always ask.
+enum ActionKind {
+  ACTION_KIND_UNSPECIFIED = 0;
+  ACTION_KIND_ORDINARY = 1;
+  ACTION_KIND_PRODUCTION_DEPLOY = 2;
+  ACTION_KIND_IAM_CHANGE = 3;
+  ACTION_KIND_DATA_DELETION = 4;
+  ACTION_KIND_NEW_SPEND = 5;
+}
+
+enum ApprovalState {
+  APPROVAL_STATE_UNSPECIFIED = 0;
+  APPROVAL_STATE_PENDING = 1;
+  APPROVAL_STATE_APPROVED = 2;
+  APPROVAL_STATE_REJECTED = 3;
+  // The task moved on (cancelled, failed, answered elsewhere) before a decision.
+  APPROVAL_STATE_SUPERSEDED = 4;
+}
+
+// RememberScope says how long an answer applies to identical later calls.
+// Always-ask kinds accept only ONCE.
+enum RememberScope {
+  REMEMBER_SCOPE_UNSPECIFIED = 0;
+  REMEMBER_SCOPE_ONCE = 1;
+  REMEMBER_SCOPE_CONVERSATION = 2;
+  REMEMBER_SCOPE_ALWAYS = 3;
+}
+
+message ToolCall {
+  // HITL correlation ID of this call within the pause.
+  string id = 1;
+  string call_id = 2;
+  string name = 3;
+  google.protobuf.Struct args = 4;
+  ActionKind kind = 5;
+}
+
+message Approval {
+  string id = 1;
+  ApprovalState state = 2;
+  // The kagent session (A2A contextId) and task that are paused.
+  string session_id = 3;
+  string task_id = 4;
+  string agent = 5;
+  Person requester = 6;
+  repeated ToolCall calls = 7;
+  // The most restrictive kind among calls.
+  ActionKind kind = 8;
+  string hint = 9;
+  // Who may decide: group names, and named people (after reassignment).
+  repeated string approver_groups = 10;
+  repeated Person approvers = 11;
+  // Whether the requester is barred from deciding.
+  bool requester_may_decide = 12;
+  // Set when decided.
+  Person decided_by = 13;
+  string reason = 14;
+  google.protobuf.Timestamp created_at = 15;
+  google.protobuf.Timestamp decided_at = 16;
+  // Whether the caller may decide this approval. Clients draw buttons from this.
+  bool caller_may_decide = 17;
+  string app_id = 18;
+}
+
+enum InboxView {
+  INBOX_VIEW_UNSPECIFIED = 0;
+  // Pending approvals the caller may decide.
+  INBOX_VIEW_TO_DECIDE = 1;
+  // Approvals on the caller's own conversations, any state.
+  INBOX_VIEW_MY_REQUESTS = 2;
+  // Approvals the caller decided.
+  INBOX_VIEW_DECIDED_BY_ME = 3;
+}
+
+message ListInboxRequest {
+  InboxView view = 1;
+  PageRequest page = 2;
+}
+
+message ListInboxResponse {
+  repeated Approval approvals = 1;
+  PageResponse page = 2;
+}
+
+message GetApprovalRequest {
+  string id = 1;
+}
+
+message GetApprovalResponse {
+  Approval approval = 1;
+}
+
+message ListSessionApprovalsRequest {
+  string session_id = 1;
+}
+
+message ListSessionApprovalsResponse {
+  repeated Approval approvals = 1;
+}
+
+message CallDecision {
+  string id = 1;
+  bool approved = 2;
+  string reason = 3;
+}
+
+message DecideRequest {
+  string approval_id = 1;
+  // One decision per call. Omitted calls take the overall decision.
+  repeated CallDecision calls = 2;
+  bool approved = 3;
+  string reason = 4;
+  RememberScope remember = 5;
+}
+
+message DecideResponse {
+  Approval approval = 1;
+}
+
+message ReassignRequest {
+  string approval_id = 1;
+  // Email or principal ID of the colleague.
+  string assignee = 2;
+  string note = 3;
+}
+
+message ReassignResponse {
+  Approval approval = 1;
+}
+
+message RememberedAnswer {
+  string id = 1;
+  RememberScope scope = 2;
+  string tool_name = 3;
+  string agent = 4;
+  string session_id = 5;
+  bool approved = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ListRememberedAnswersRequest {}
+
+message ListRememberedAnswersResponse {
+  repeated RememberedAnswer answers = 1;
+}
+
+message ForgetRememberedAnswerRequest {
+  string id = 1;
+}
+
+message ForgetRememberedAnswerResponse {}
+
+message GetPolicyRequest {}
+
+message KindPolicy {
+  ActionKind kind = 1;
+  string description = 2;
+  repeated string approver_groups = 3;
+  bool requester_may_decide = 4;
+}
+
+message GetPolicyResponse {
+  repeated KindPolicy kinds = 1;
+}

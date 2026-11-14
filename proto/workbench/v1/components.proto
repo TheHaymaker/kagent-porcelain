@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package workbench.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/thehaymaker/kagent-porcelain/server/gen/workbench/v1;workbenchv1";
+
+// ComponentService returns the A2UI surfaces agents emitted in a conversation.
+//
+// Agents emit components through the workbench_show MCP tool, which validates
+// them against the Workbench catalogue and stores them. A client that also
+// receives A2UI DataParts in the A2A stream can ignore this service; it exists
+// so that every surface, including ones that only poll (Teams, mobile), gets
+// the same components.
+service ComponentService {
+  rpc ListSurfaces(ListSurfacesRequest) returns (ListSurfacesResponse);
+  rpc GetCatalog(GetCatalogRequest) returns (GetCatalogResponse);
+  // SendAction delivers a user action on a component (an A2UI action event)
+  // back to the conversation that emitted it.
+  rpc SendAction(SendActionRequest) returns (SendActionResponse);
+}
+
+message Surface {
+  string surface_id = 1;
+  string session_id = 2;
+  string task_id = 3;
+  string catalog_id = 4;
+  // The A2UI messages that build the surface, in order, as JSON objects.
+  repeated google.protobuf.Struct messages = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message ListSurfacesRequest {
+  string session_id = 1;
+}
+
+message ListSurfacesResponse {
+  repeated Surface surfaces = 1;
+}
+
+message GetCatalogRequest {}
+
+message GetCatalogResponse {
+  string catalog_id = 1;
+  // The catalogue's JSON schema document.
+  google.protobuf.Struct catalog = 2;
+}
+
+message SendActionRequest {
+  string surface_id = 1;
+  string name = 2;
+  string source_component_id = 3;
+  google.protobuf.Struct context = 4;
+}
+
+message SendActionResponse {}

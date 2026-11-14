@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package workbench.v1;
+
+import "google/protobuf/timestamp.proto";
+import "workbench/v1/common.proto";
+
+option go_package = "github.com/thehaymaker/kagent-porcelain/server/gen/workbench/v1;workbenchv1";
+
+// IdentityService tells a client who is signed in and links the other
+// identities (a Microsoft account used in Teams, a device) to that person.
+service IdentityService {
+  rpc GetMe(GetMeRequest) returns (GetMeResponse);
+  // LinkIdentity proves control of a second identity by presenting a token it
+  // issued, while signed in with the company account.
+  rpc LinkIdentity(LinkIdentityRequest) returns (LinkIdentityResponse);
+  rpc ListLinkedIdentities(ListLinkedIdentitiesRequest) returns (ListLinkedIdentitiesResponse);
+  rpc UnlinkIdentity(UnlinkIdentityRequest) returns (UnlinkIdentityResponse);
+}
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_REQUESTER = 1;
+  ROLE_APPROVER = 2;
+  ROLE_PLATFORM_ENGINEER = 3;
+  ROLE_AUDITOR = 4;
+}
+
+message GetMeRequest {}
+
+message GetMeResponse {
+  Person person = 1;
+  repeated string groups = 2;
+  repeated Role roles = 3;
+  // The surface this token came from: web, teams, ios, android.
+  string surface = 4;
+}
+
+message LinkedIdentity {
+  // The issuer that vouched for the linked identity, e.g. login.microsoftonline.com/<tenant>/v2.0.
+  string issuer = 1;
+  string subject = 2;
+  string display_hint = 3;
+  google.protobuf.Timestamp linked_at = 4;
+}
+
+message LinkIdentityRequest {
+  // An ID token from the identity being linked.
+  string id_token = 1;
+}
+
+message LinkIdentityResponse {
+  LinkedIdentity identity = 1;
+}
+
+message ListLinkedIdentitiesRequest {}
+
+message ListLinkedIdentitiesResponse {
+  repeated LinkedIdentity identities = 1;
+}
+
+message UnlinkIdentityRequest {
+  string issuer = 1;
+  string subject = 2;
+}
+
+message UnlinkIdentityResponse {}
