@@ -14,12 +14,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Breaking-change checks need an API on the base branch to compare
+      # against; the first PR into main has none.
+      - name: Base branch has an API
+        id: base
+        run: |
+          if git cat-file -e "origin/${{ github.base_ref || 'main' }}:proto/workbench/v1" 2>/dev/null; then
+            echo "has_api=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_api=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: bufbuild/buf-action@v1
         with:
           lint: true
           format: false
-          breaking: ${{ github.event_name == 'pull_request' }}
-          breaking_against: "${{ github.event.repository.clone_url }}#branch=main"
+          breaking: ${{ github.event_name == 'pull_request' && steps.base.outputs.has_api == 'true' }}
+          breaking_against: "${{ github.event.repository.clone_url }}#branch=${{ github.base_ref }}"
+          pr_comment: false
           push: false
       - name: Catalogue copy is current
         run: cmp catalogue/catalog.json server/internal/components/catalog.json
