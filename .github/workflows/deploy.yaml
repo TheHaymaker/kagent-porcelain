@@ -18,7 +18,7 @@ on:
         default: us-central1
       secret_name:
         description: Name of the deploy environment secret holding the service account JSON key
-        default: GCP_SA_KEY
+        default: GCP_SA_KEY_JSON
 
 permissions:
   contents: read
