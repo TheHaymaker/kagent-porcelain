@@ -196,6 +196,17 @@ CFG
       -n "$NAMESPACE" "${args[@]}" \
       --set database.postgres.readWriteConnectionStringSecretRef.name=diagnostic \
       --set database.postgres.ownerConnectionStringSecretRef.name=diagnostic >/dev/null || true
+    # A chart that renders but never becomes ready means a pod is failing;
+    # show what the cluster says about it.
+    if kubectl -n "$NAMESPACE" get deploy kagent-controller >/dev/null 2>&1; then
+      say "Pods in $NAMESPACE" >&2
+      kubectl -n "$NAMESPACE" get pods -o wide >&2 || true
+      say "Controller pod events and status" >&2
+      kubectl -n "$NAMESPACE" describe pod -l app.kubernetes.io/component=controller >&2 | tail -60 || true
+      say "Controller logs (current, then previous crash)" >&2
+      kubectl -n "$NAMESPACE" logs deploy/kagent-controller --all-containers --tail=120 >&2 || true
+      kubectl -n "$NAMESPACE" logs deploy/kagent-controller --all-containers --previous --tail=120 >&2 || true
+    fi
     die "kagent install failed"
   fi
 }
