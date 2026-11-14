@@ -1,0 +1,57 @@
+{
+  "openai": [
+    {
+      "name": "ask_for_production",
+      "match": {
+        "match_type": "contains",
+        "message": { "role": "user", "content": "workbench smoke: promote" }
+      },
+      "response": {
+        "id": "chatcmpl-smoke-1",
+        "object": "chat.completion",
+        "created": 1763078400,
+        "model": "workbench-smoke",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "",
+              "tool_calls": [
+                {
+                  "id": "call_smoke_promote",
+                  "type": "function",
+                  "function": {
+                    "name": "workbench_request_promotion",
+                    "arguments": "{\"appId\": \"app_smoke\", \"revision\": \"smoke-r1\", \"note\": \"end-to-end smoke test\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ]
+      }
+    },
+    {
+      "name": "finish_after_tool",
+      "match": {
+        "match_type": "contains",
+        "message": { "role": "tool", "content": "app_smoke", "tool_call_id": "call_smoke_promote" }
+      },
+      "response": {
+        "id": "chatcmpl-smoke-2",
+        "object": "chat.completion",
+        "created": 1763078401,
+        "model": "workbench-smoke",
+        "choices": [
+          {
+            "index": 0,
+            "message": { "role": "assistant", "content": "Workbench smoke run finished." },
+            "finish_reason": "stop"
+          }
+        ]
+      }
+    }
+  ]
+}

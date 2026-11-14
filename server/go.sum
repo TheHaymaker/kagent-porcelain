@@ -456,6 +456,8 @@ github.com/julienschmidt/httprouter v1.2.0/go.mod h1:SYymIcj16QtmaHHD7aYtjjsJG7V
 github.com/julienschmidt/httprouter v1.3.0/go.mod h1:JR6WtHb+2LUe8TCKY3cZOxFyyO8IZAc4RVcycCCAKdM=
 github.com/kagent-dev/kagent/go v0.0.0-20261113212255-eb42f649dfae h1:j00WZuPLSp1C2aEKYafL5jTGbAuH3oseAh77LehRfDk=
 github.com/kagent-dev/kagent/go v0.0.0-20261113212255-eb42f649dfae/go.mod h1:LAbMGdN8eFDW7AerXuJZK+yCm8/2nICjEzV5N2O7SZ0=
+github.com/kagent-dev/mockllm v0.1.0 h1:EkBE7BhMnL4Unfu78OazQVDAWi00aWXiswErkVoE4iU=
+github.com/kagent-dev/mockllm v0.1.0/go.mod h1:RLp2ZL/UPY6qqbHNogvf70apXX9R670tESJdDuIli9A=
 github.com/kagent-dev/substrate v1.0.0 h1:HPNLB1UhcI/H/bn0sGR9zYhZ8MZqIEQPKJffS8u0INE=
 github.com/kagent-dev/substrate v1.0.0/go.mod h1:goUJ1lHoPhJLrrZr082wugImt5MRDdhWMYXxklUc/eE=
 github.com/keybase/go-keychain v0.0.1 h1:way+bWYa6lDppZoZcgMbYsvC7GxljxrskdNInRtuthU=
