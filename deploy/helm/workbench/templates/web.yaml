@@ -41,6 +41,12 @@ spec:
             - name: config
               mountPath: /usr/share/nginx/html/config.json
               subPath: config.json
+            # The root filesystem is read-only; nginx renders its config and
+            # keeps temp files here.
+            - name: conf
+              mountPath: /etc/nginx/conf.d
+            - name: tmp
+              mountPath: /tmp
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
           securityContext:
@@ -54,6 +60,10 @@ spec:
         - name: config
           configMap:
             name: workbench-web-config
+        - name: conf
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
