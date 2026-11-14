@@ -52,7 +52,9 @@ phase_check() {
   # Projects created by some Google tools start with even these APIs off.
   # Turning them on changes nothing else, and needs serviceusage permission.
   gc services enable serviceusage.googleapis.com cloudresourcemanager.googleapis.com cloudbilling.googleapis.com ||
-    die "cannot enable APIs in $PROJECT_ID; the service account needs Owner, or Service Usage Admin, on the project"
+    die "cannot enable APIs in $PROJECT_ID. Either the Service Usage API is off (turn it on once in the console:
+  https://console.cloud.google.com/apis/library/serviceusage.googleapis.com?project=$PROJECT_ID), or the
+  service account lacks Owner or Service Usage Admin on the project. The gcloud error above says which."
   gc projects describe "$PROJECT_ID" --format='value(projectId)' >/dev/null || die "cannot read project $PROJECT_ID"
   local billing account
   billing=$(gcloud billing projects describe "$PROJECT_ID" --format='value(billingEnabled)' 2>/dev/null || echo unknown)
