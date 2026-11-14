@@ -1,0 +1,10 @@
+# What Cloud Build does not need from the repository.
+.git
+**/node_modules
+**/dist
+server/bin
+deploy/gcp/.state
+web/docs
+**/*.png
+**/.venv
+**/__pycache__
