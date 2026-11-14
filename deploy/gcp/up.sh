@@ -323,8 +323,14 @@ phase_smoke() {
   kubectl -n "$NAMESPACE" port-forward svc/kagent-controller 18083:8083 >/dev/null 2>&1 &
   local pf=$!; trap 'kill $pf 2>/dev/null' RETURN
   sleep 3
-  (cd "$ROOT/server" && go run ./cmd/workbench-smoke run -api http://localhost:18083 \
-    -agent "$NAMESPACE/workbench-smoke" -key "$STATE/secrets/smoke/signing-key.json" -issuer "$SMOKE_ISSUER")
+  if ! (cd "$ROOT/server" && go run ./cmd/workbench-smoke run -api http://localhost:18083 \
+    -agent "$NAMESPACE/workbench-smoke" -key "$STATE/secrets/smoke/signing-key.json" -issuer "$SMOKE_ISSUER"); then
+    say "Smoke test failed; recent controller warnings and errors"
+    kubectl -n "$NAMESPACE" logs deploy/kagent-controller --all-containers --since=15m 2>&1 |
+      grep -iE 'level=(warn|error)|"level":"(warn|error)"|panic' | tail -60 >&2 || true
+    kubectl -n "$NAMESPACE" logs deploy/workbench-mockllm --tail=40 >&2 || true
+    return 1
+  fi
 }
 
 phase_status() {
