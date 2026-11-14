@@ -143,15 +143,17 @@ phase_images() {
   done
 }
 
-# kagent_cli builds the kagent CLI at the commit Workbench is built against.
+# kagent_cli builds the kagent CLI at the commit Workbench is built against
+# and prints its path; everything else it says goes to stderr, because the
+# caller captures stdout.
 kagent_cli() {
   local bin="$STATE/kagent"
   if [[ ! -x $bin ]]; then
-    say "Building the kagent CLI at ${KAGENT_COMMIT:0:7}"
+    say "Building the kagent CLI at ${KAGENT_COMMIT:0:7}" >&2
     local src="$STATE/kagent-src"
     [[ -d $src ]] || git clone -q https://github.com/kagent-dev/kagent.git "$src"
     git -C "$src" fetch -q --depth 1 origin "$KAGENT_COMMIT" && git -C "$src" checkout -q "$KAGENT_COMMIT"
-    (cd "$src/go" && go build -o "$bin" ./core/cli/cmd/kagent)
+    (cd "$src/go" && go build -o "$bin" ./core/cli/cmd/kagent) >&2
   fi
   echo "$bin"
 }
