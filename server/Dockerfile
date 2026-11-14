@@ -24,7 +24,8 @@ RUN v=github.com/kagent-dev/kagent/go/core/internal/version && \
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/app /app
-USER nonroot:nonroot
+# Numeric, so Kubernetes can verify runAsNonRoot (distroless's nonroot is 65532).
+USER 65532:65532
 # kagent's chart runs the controller image with --config=/etc/kagent/controller.yaml;
 # the Workbench configuration is read from /etc/workbench/workbench.yaml.
 ENTRYPOINT ["/app"]
