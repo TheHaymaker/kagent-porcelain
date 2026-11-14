@@ -1,0 +1,19 @@
+[server]
+# Cloud Run sets PORT; the Dockerfile passes it as --server.port.
+headless = true
+# IAP terminates the user's request; Cloud Run's frontend is the only client.
+enableCORS = true
+enableXsrfProtection = true
+fileWatcherType = "none"
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "viewer"
+showErrorDetails = "none"
+
+[logger]
+# Streamlit's own logger is plain text on stderr; app logs are JSON on stdout.
+level = "warning"

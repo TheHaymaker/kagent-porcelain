@@ -1,0 +1,122 @@
+# In-cluster model gateway: LiteLLM proxy in front of Claude on Vertex AI.
+# See agents/README.md ("Model gateway") for why LiteLLM and how to mint keys.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: workbench-system
+  labels:
+    app.kubernetes.io/part-of: workbench
+---
+# GKE Workload Identity: this KSA acts as a Google service account that has
+# roles/aiplatform.user on VERTEX_PROJECT and nothing else.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: model-gateway
+  namespace: workbench-system
+  annotations:
+    iam.gke.io/gcp-service-account: model-gateway@workbench-platform.iam.gserviceaccount.com
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-gateway
+  namespace: workbench-system
+  labels:
+    app.kubernetes.io/name: model-gateway
+spec:
+  selector:
+    app.kubernetes.io/name: model-gateway
+  ports:
+    - name: http
+      port: 4000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-gateway
+  namespace: workbench-system
+  labels:
+    app.kubernetes.io/name: model-gateway
+    app.kubernetes.io/part-of: workbench
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: model-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: model-gateway
+    spec:
+      serviceAccountName: model-gateway
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: litellm
+          # Pin the LiteLLM release you have tested, by digest.
+          image: ghcr.io/berriai/litellm@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          args: ["--config", "/etc/litellm/config.yaml", "--port", "4000", "--num_workers", "4"]
+          ports:
+            - name: http
+              containerPort: 4000
+          env:
+            - name: VERTEX_PROJECT
+              value: workbench-platform
+            - name: VERTEX_LOCATION
+              value: global
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef: {name: model-gateway, key: master-key}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: model-gateway, key: database-url}
+          readinessProbe:
+            httpGet: {path: /health/readiness, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health/liveliness, port: http}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/litellm
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: model-gateway-config
+---
+# Only kagent Actors' egress (through Substrate's egress gateway) and platform
+# operators may call the gateway. Adjust the namespace labels to where your
+# Substrate egress gateway and operator tooling run.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: model-gateway
+  namespace: workbench-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: model-gateway
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ate-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: workbench-system
+      ports:
+        - port: 4000

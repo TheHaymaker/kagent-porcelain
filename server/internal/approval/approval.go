@@ -269,6 +269,33 @@ func (s *Service) Sync(ctx context.Context, caller identity.Caller, sessionID, t
 	return s.Observe(ctx, Observation{SessionID: sessionID, TaskID: taskID, State: t.State, Message: t.Message})
 }
 
+// SyncSession observes every paused task in a session. The approval list a
+// client reads is therefore current even when no push notification arrived.
+func (s *Service) SyncSession(ctx context.Context, caller identity.Caller, sessionID string) error {
+	ws, err := s.session(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if !s.mayView(caller, ws.RequesterID) {
+		return ErrPermission
+	}
+	tasks, err := s.Kagent.PausedTasks(ctx, ws.RequesterID, ws.Agent, sessionID)
+	if err != nil {
+		return err
+	}
+	for _, t := range tasks {
+		if s.CallbackURL != "" {
+			if err := s.Kagent.Watch(ctx, ws.RequesterID, ws.Agent, t.ID, s.CallbackURL); err != nil {
+				s.log().WarnContext(ctx, "register push callback", "task", t.ID, "error", err)
+			}
+		}
+		if err := s.Observe(ctx, Observation{SessionID: sessionID, TaskID: t.ID, State: t.State, Message: t.Message}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Service) mayView(c identity.Caller, requesterID string) bool {
 	return c.ID == requesterID || c.Delegated
 }

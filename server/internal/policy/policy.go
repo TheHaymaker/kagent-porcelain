@@ -95,7 +95,7 @@ func Default(approverGroup string) Policy {
 			Description: "Creating something that costs money every month",
 			Rules: []Rule{
 				{Tools: []string{"*_create_dataset", "*_create_instance", "*_create_cluster", "*_create_bucket"}},
-				{Tools: []string{"cloudrun_deploy_preview"}, When: []Condition{{Arg: "createService", Equals: []string{"true"}}}},
+				{Tools: []string{"cloudrun_deploy_preview"}, When: []Condition{{Arg: "allow_create", Equals: []string{"true"}}}},
 			},
 			ApproverGroups:     []string{approverGroup},
 			RequesterMayDecide: true,

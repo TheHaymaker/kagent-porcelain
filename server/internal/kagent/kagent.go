@@ -51,6 +51,8 @@ type Client interface {
 	// Send sends a user message into an existing task as asPrincipal, on
 	// behalf of actorID (who is recorded, not authenticated, by kagent).
 	Send(ctx context.Context, asPrincipal, actorID, agent string, msg hitl.Message) error
+	// PausedTasks lists a session's tasks that are waiting for input.
+	PausedTasks(ctx context.Context, asPrincipal, agent, sessionID string) ([]Task, error)
 	// Watch registers a push notification callback for a task.
 	Watch(ctx context.Context, asPrincipal, agent, taskID, callbackURL string) error
 }
@@ -147,6 +149,25 @@ func (l *Loopback) Task(ctx context.Context, as, agent, taskID string) (Task, er
 		return Task{}, err
 	}
 	return FromA2ATask(t), nil
+}
+
+// PausedTasks implements Client.
+func (l *Loopback) PausedTasks(ctx context.Context, as, agent, sessionID string) ([]Task, error) {
+	c, err := l.a2a(ctx, agent)
+	if err != nil {
+		return nil, err
+	}
+	ctx = context.WithValue(ctx, tokenKey{}, l.minter.Mint(as, "", "read-task"))
+	zero := 0
+	resp, err := c.ListTasks(ctx, &a2a.ListTasksRequest{ContextID: sessionID, Status: a2a.TaskStateInputRequired, PageSize: 20, HistoryLength: &zero})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Task, 0, len(resp.Tasks))
+	for _, t := range resp.Tasks {
+		out = append(out, FromA2ATask(t))
+	}
+	return out, nil
 }
 
 // Send implements Client.

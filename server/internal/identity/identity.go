@@ -103,7 +103,7 @@ type Authenticator struct {
 	// platform group, so it may read any session.
 	SystemGroups []string
 	now          func() time.Time
-	log      *slog.Logger
+	log          *slog.Logger
 }
 
 var _ auth.AuthProvider = (*Authenticator)(nil)

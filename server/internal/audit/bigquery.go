@@ -10,15 +10,16 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/thehaymaker/kagent-porcelain/server/internal/duration"
 	"github.com/thehaymaker/kagent-porcelain/server/internal/store"
 )
 
 // BigQueryConfig says where to export.
 type BigQueryConfig struct {
-	Project  string        `json:"project" yaml:"project"`
-	Dataset  string        `json:"dataset" yaml:"dataset"`
-	Table    string        `json:"table" yaml:"table"`
-	Interval time.Duration `json:"interval" yaml:"interval"`
+	Project  string            `json:"project" yaml:"project"`
+	Dataset  string            `json:"dataset" yaml:"dataset"`
+	Table    string            `json:"table" yaml:"table"`
+	Interval duration.Duration `json:"interval" yaml:"interval"`
 }
 
 // BigQueryExporter ships audit events to BigQuery with the tabledata.insertAll
@@ -40,7 +41,7 @@ const cursorName = "bigquery"
 
 // Start runs until ctx ends. It implements controller-runtime's Runnable.
 func (x *BigQueryExporter) Start(ctx context.Context) error {
-	interval := x.Config.Interval
+	interval := x.Config.Interval.D()
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}

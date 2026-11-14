@@ -15,8 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kagent-dev/kagent/go/core/pkg/migrations"
 
-	wbmigrations "github.com/thehaymaker/kagent-porcelain/server/migrations"
 	"github.com/thehaymaker/kagent-porcelain/server/internal/store"
+	wbmigrations "github.com/thehaymaker/kagent-porcelain/server/migrations"
 )
 
 // EnvVar names the database URL tests use.

@@ -46,6 +46,15 @@ func (f *fakeKagent) Send(_ context.Context, as, actor, agent string, msg hitl.M
 	f.sent = append(f.sent, sent{as, actor, agent, msg})
 	return nil
 }
+func (f *fakeKagent) PausedTasks(_ context.Context, as, agent, session string) ([]kagent.Task, error) {
+	var out []kagent.Task
+	for _, t := range f.tasks {
+		if t.State == hitl.StateInputRequired {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
 func (f *fakeKagent) Watch(context.Context, string, string, string, string) error { return nil }
 
 type fakeNotify struct{ notices map[string][]notify.Notice }
@@ -319,5 +328,21 @@ func TestRequestPromotionFromCatalogue(t *testing.T) {
 	got, err := e.svc.Decide(ctx, bob, Decision{ApprovalID: a.ID, Approved: true})
 	if err != nil || !got.Delivered || len(e.p.promoted) != 1 || len(e.k.sent) != 0 {
 		t.Fatalf("catalogue promotion: %v %+v", err, got)
+	}
+}
+
+func TestSyncSessionFindsPausesWithoutPush(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	e.k.tasks["t9"] = kagent.Task{ID: "t9", ContextID: "ctx", State: hitl.StateInputRequired, Message: pause("t9", hitl.Tool{ID: "a", Name: "bigquery_delete_table"})}
+	if err := e.svc.SyncSession(ctx, carol, "ctx"); !errors.Is(err, ErrPermission) {
+		t.Fatal("only the requester may sync their session")
+	}
+	if err := e.svc.SyncSession(ctx, alice, "ctx"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := e.s.ListSessionApprovals(ctx, "ctx")
+	if len(list) != 1 || list[0].Kind != policy.DataDeletion {
+		t.Fatalf("%+v", list)
 	}
 }

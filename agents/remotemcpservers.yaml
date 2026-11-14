@@ -1,0 +1,127 @@
+# Tool servers the builder binds. RemoteMCPServer fields used here come from
+# go/api/v1alpha3/remotemcpserver_types.go: description, protocol, url, timeout,
+# sseReadTimeout, headersFrom, actorJwt.
+#
+# Notes that apply to all of them under the Claude harness
+# (go/core/internal/translator/claude/mcp.go):
+#   - protocol STREAMABLE_HTTP -> Claude "http" MCP transport.
+#   - tokenPassthrough is rejected by the Claude compiler, so the requester's own
+#     token can NOT be forwarded to these servers. Each server sees the builder
+#     Actor's identity (actorJwt) instead; Workbench maps Actor -> Session -> app
+#     owner on its side.
+#   - timeout other than 30s and TLS settings are ignored with a warning; we
+#     leave timeout at the default.
+#   - each server's origin is added to the Actor's egress automatically, so
+#     these do not need EgressPolicy entries.
+---
+# Workbench's own tools. The Workbench server embeds kagent core as a library
+# and registers workbench_* tools on kagent's authenticated /mcp endpoint through
+# app.Options.MCPExtensions (docs/architecture/mcp.md, "Extending the server").
+# The same endpoint also serves kagent's session/checkpoint/sandbox tools.
+#
+# The URL's origin must equal kagent's configured control-plane URL: for that
+# origin Substrate replaces the Authorization header with the Actor's
+# `kagent-runtime` JWT (go/core/internal/substrate/policy.go), which is how the
+# Workbench server knows which Session (and therefore which requester and app)
+# is calling. The gateway only replaces a header that is present, so we send a
+# literal placeholder. `kagent-runtime` is a reserved audience and cannot be
+# requested through spec.actorJwt, hence a literal header rather than actorJwt.
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: workbench-api
+  namespace: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  description: >-
+    Workbench tools: show components to the requester (workbench_show), register
+    apps, record preview deployments, request production promotion, read app
+    state; plus kagent session and sandbox tools.
+  protocol: STREAMABLE_HTTP
+  url: http://workbench.workbench-system.svc.cluster.local:8083/mcp
+  sseReadTimeout: 5m0s
+  headersFrom:
+    - name: Authorization
+      value: "Bearer kagent-credential-injected"
+---
+# GCP/GitLab tool servers (built separately). Each authenticates the calling
+# Actor with a Substrate-minted JWT whose audience is the server's own name;
+# the server must trust Substrate's issuer and check that audience
+# (credential-injection.md, "Actor JWT authentication"). The servers act on
+# Google Cloud / GitLab with THEIR OWN workload identity, scoped to preview
+# resources only. Controller-side tool discovery is disabled automatically for
+# actorJwt servers, so their tools do not appear in the kagent UI picker; the
+# runtime discovers them at session start.
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: gitlab-mcp
+  namespace: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  description: >-
+    GitLab: create projects in the workbench-apps group, open merge requests
+    (gitlab_create_merge_request), read pipeline status and job logs.
+  protocol: STREAMABLE_HTTP
+  url: http://gitlab-mcp.workbench-tools.svc.cluster.local:8080/mcp
+  sseReadTimeout: 5m0s
+  actorJwt:
+    audiences: [gitlab-mcp]
+    expirationSeconds: 900
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: cloudrun-mcp
+  namespace: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  description: >-
+    Cloud Run (preview project only): deploy a preview revision from an Artifact
+    Registry image (cloudrun_deploy_preview), read service status and logs.
+    Production deploys are not exposed here; they happen only after a Workbench
+    approval.
+  protocol: STREAMABLE_HTTP
+  url: http://cloudrun-mcp.workbench-tools.svc.cluster.local:8080/mcp
+  sseReadTimeout: 5m0s
+  actorJwt:
+    audiences: [cloudrun-mcp]
+    expirationSeconds: 900
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: artifactregistry-mcp
+  namespace: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  description: >-
+    Artifact Registry: look up images and digests pushed by an app's CI pipeline.
+  protocol: STREAMABLE_HTTP
+  url: http://artifactregistry-mcp.workbench-tools.svc.cluster.local:8080/mcp
+  sseReadTimeout: 5m0s
+  actorJwt:
+    audiences: [artifactregistry-mcp]
+    expirationSeconds: 900
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: bigquery-mcp
+  namespace: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  description: >-
+    BigQuery (read-only, max bytes billed enforced server-side): list datasets
+    and tables, read schemas, dry-run and run queries (bigquery_run_query).
+  protocol: STREAMABLE_HTTP
+  url: http://bigquery-mcp.workbench-tools.svc.cluster.local:8080/mcp
+  sseReadTimeout: 5m0s
+  actorJwt:
+    audiences: [bigquery-mcp]
+    expirationSeconds: 900

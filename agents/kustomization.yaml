@@ -1,0 +1,27 @@
+# kubectl apply -k agents/            (builder pack, namespace workbench-builders)
+# kubectl apply -k agents/model-gateway/  (gateway, namespace workbench-system)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - modelconfig.yaml
+  - remotemcpservers.yaml
+  - egresspolicies.yaml
+  - harness.yaml
+  - agenttemplates.yaml
+  - agent.yaml
+  - sandboxtemplate.yaml
+configMapGenerator:
+  # AgentTemplate.spec.systemPromptFrom reads a key of a same-namespace
+  # ConfigMap. Prompts stay as reviewable markdown in prompts/.
+  - name: workbench-builder-prompts
+    namespace: workbench-builders
+    files:
+      - builder.md=prompts/builder.md
+      - reviewer.md=prompts/reviewer.md
+    options:
+      # systemPromptFrom names the ConfigMap literally; kustomize does not
+      # rewrite references inside custom resources, so no hash suffix.
+      disableNameSuffixHash: true
+      labels:
+        app.kubernetes.io/part-of: workbench

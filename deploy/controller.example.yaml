@@ -1,0 +1,27 @@
+# kagent's controller configuration, exactly as kagent documents it
+# (docs/architecture/process-configuration.md). Workbench reads it unchanged.
+# With Helm, kagent's chart generates this file; see deploy/helm/values-workbench.yaml.
+kubernetes:
+  namespace: workbench
+  watchNamespaces: [workbench, workbench-builders]
+server:
+  bindAddress: ":8083"
+database:
+  owner:
+    urlFile: secrets/database-owner-url
+    role: kagent_owner
+  readWrite:
+    urlFile: secrets/database-readwrite-url
+    role: kagent_readwrite
+  schema: kagent
+gateway:
+  publicUrl: https://workbench.example.com
+push:
+  issuer: https://workbench.example.com
+  signingPrivateKeyFile: secrets/push-private-key.pem
+  # The push callback is Workbench's in-cluster hooks listener.
+  allowHttp: true
+  allowPrivateNetworks: true
+runtimeDefaults:
+  controlPlaneUrl: http://workbench-controller.workbench.svc:8083
+  gatewayUrl: http://workbench-controller.workbench.svc:8083

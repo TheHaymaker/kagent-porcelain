@@ -1,0 +1,55 @@
+# Golden path manifest. Read by the Workbench builder (using-scaffolds skill)
+# and by humans choosing a template.
+apiVersion: workbench.dev/v1
+kind: Scaffold
+name: python-fastapi-cloudrun
+description: >-
+  A small internal web tool: server-rendered pages (Jinja2 + HTMX) on FastAPI,
+  running on Cloud Run behind IAP, that knows who the signed-in user is.
+whenToUse:
+  - Forms and simple workflows that replace a spreadsheet or an email thread
+  - Lists, trackers and request queues for one team
+  - Tools that call one or two internal HTTP APIs and show the result
+  - The requester needs "who did what" (the signed-in user's email is available)
+whenNotToUse:
+  - Charts and analysis over BigQuery tables (use streamlit-bigquery)
+  - Rich, highly interactive UIs such as drag-and-drop boards (use node-react-cloudrun)
+language: python
+runtime:
+  python: ">=3.12"
+  framework: fastapi
+  packageManager: uv
+ports:
+  - name: http
+    containerPort: 8080
+    env: PORT
+healthCheck:
+  path: /healthz
+identity:
+  source: IAP
+  headers: [X-Goog-Authenticated-User-Email, X-Goog-IAP-JWT-Assertion]
+  verifyWith: IAP_AUDIENCE
+commands:
+  install: make install
+  test: make test
+  run: make run
+  lint: make lint
+rename:
+  # Replace the placeholder app name in these files when creating an app.
+  placeholder: workbench-app
+  files: [pyproject.toml, app/main.py, app/templates/base.html, README.md]
+requiredApis:
+  - run.googleapis.com
+  - iap.googleapis.com
+  - artifactregistry.googleapis.com
+  - cloudbuild.googleapis.com
+  - logging.googleapis.com
+runtimeServiceAccount:
+  name: "app-{name}@{project}.iam.gserviceaccount.com"
+  roles: []   # no project roles; see IAM.md for what to add per feature
+state:
+  default: in-memory (resets on every restart; fine for demos, not for real data)
+  persistent: >-
+    For data that must survive restarts, add Firestore in Native mode
+    (firestore.googleapis.com) and grant roles/datastore.user to the runtime
+    service account on the app's own database only; see IAM.md.

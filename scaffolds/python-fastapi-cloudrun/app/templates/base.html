@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
+  <title>{% block title %}workbench-app{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+  <script src="{{ url_for('static', path='htmx.min.js') }}" defer></script>
+</head>
+<body>
+  <header>
+    <h1>workbench-app</h1>
+    {% if user %}<p class="who">Signed in as {{ user.email }}</p>{% endif %}
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+</body>
+</html>

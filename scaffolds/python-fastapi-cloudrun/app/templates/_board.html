@@ -1,0 +1,24 @@
+{# Re-rendered as a whole after every change, so the form resets and errors show
+   without inline scripts (the Content-Security-Policy forbids them). #}
+<section id="board">
+  <form hx-post="/items" hx-target="#board" hx-swap="outerHTML">
+    <label for="title">New item</label>
+    <input id="title" name="title" maxlength="200" required autocomplete="off" value="{{ title or '' }}">
+    <button type="submit">Add</button>
+  </form>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <ul id="items">
+    {% for item in items %}
+    <li class="{{ 'done' if item.done else '' }}">
+      <button hx-post="/items/{{ item.id }}/toggle" hx-target="#board" hx-swap="outerHTML"
+              aria-label="Mark {{ item.title }} as {{ 'not done' if item.done else 'done' }}">
+        {{ '✓' if item.done else '○' }}
+      </button>
+      <span class="title">{{ item.title }}</span>
+      <span class="meta">added by {{ item.created_by }}</span>
+    </li>
+    {% else %}
+    <li class="empty">Nothing here yet.</li>
+    {% endfor %}
+  </ul>
+</section>
