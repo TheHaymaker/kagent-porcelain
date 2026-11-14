@@ -66,6 +66,7 @@ function Conversation({ sessionId }: { sessionId: string }) {
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
+  const lastTop = useRef(0);
   useSyncExternalStore(store.subscribe, store.getVersion);
 
   // The first message, typed on Home, is sent once the conversation has loaded.
@@ -182,8 +183,13 @@ function Conversation({ sessionId }: { sessionId: string }) {
           className="timeline-scroll"
           ref={scrollRef}
           onScroll={(e) => {
+            // Only the reader scrolling *up* unpins; content growing under a
+            // programmatic scroll must not.
             const el = e.currentTarget;
-            atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+            const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+            const movedUp = el.scrollTop < lastTop.current - 2;
+            atBottom.current = near || (atBottom.current && !movedUp);
+            lastTop.current = el.scrollTop;
           }}
         >
           <div className="timeline" aria-live="polite" aria-busy={busy}>
