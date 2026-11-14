@@ -23,9 +23,9 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 STATE="$ROOT/deploy/gcp/.state"
 # kagent release v1.0.1, which server/go.mod pins. Its charts are published
-# as v1.0.1 and it pairs with Substrate 1.0.0.
+# as 1.0.1 (kagent's release workflow strips the v) and pairs with Substrate 1.0.0.
 KAGENT_COMMIT=558e3d761d8ed2b0d23bfef1867a9d1915210121
-KAGENT_CHART_VERSION=v1.0.1
+KAGENT_CHART_VERSION=1.0.1
 SUBSTRATE_CHART_VERSION=1.0.0
 
 : "${PROJECT_ID:?set PROJECT_ID to the GCP test project}"
