@@ -22,7 +22,11 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 STATE="$ROOT/deploy/gcp/.state"
-KAGENT_COMMIT=eb42f649dfae710a6808316b5af85cc56f529b8d
+# kagent release v1.0.1, which server/go.mod pins. Its charts are published
+# as v1.0.1 and it pairs with Substrate 1.0.0.
+KAGENT_COMMIT=558e3d761d8ed2b0d23bfef1867a9d1915210121
+KAGENT_CHART_VERSION=v1.0.1
+SUBSTRATE_CHART_VERSION=1.0.0
 
 : "${PROJECT_ID:?set PROJECT_ID to the GCP test project}"
 REGION=${REGION:-us-central1}
@@ -120,8 +124,19 @@ kagent_install() {
   local cli; cli=$(kagent_cli)
   local provider=${MODEL_PROVIDER:-Ollama}
   # The CLI config lists values files in order; later files win.
-  printf 'connection:\n  namespace: %s\ninstall:\n  defaultModelProvider: %s\n  kagent:\n    valuesFiles: [%s]\n' \
-    "$NAMESPACE" "$provider" "$1" > "$STATE/kagent-cli.yaml"
+  # A CLI built from source has no release version, so the chart versions
+  # are explicit.
+  cat > "$STATE/kagent-cli.yaml" <<CFG
+connection:
+  namespace: $NAMESPACE
+install:
+  defaultModelProvider: $provider
+  kagent:
+    version: $KAGENT_CHART_VERSION
+    valuesFiles: [$1]
+  substrate:
+    version: $SUBSTRATE_CHART_VERSION
+CFG
   "$cli" --config "$STATE/kagent-cli.yaml" install
 }
 
