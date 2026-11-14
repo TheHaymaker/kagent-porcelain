@@ -185,7 +185,19 @@ install:
   substrate:
     version: $SUBSTRATE_CHART_VERSION
 CFG
-  "$cli" --config "$STATE/kagent-cli.yaml" install
+  if ! "$cli" --config "$STATE/kagent-cli.yaml" install; then
+    # kagent install hides helm's output in case it holds credentials. Our
+    # values files hold none, so render the chart directly to see why.
+    say "kagent install failed; rendering kagent's chart directly to show helm's error" >&2
+    local args=() f
+    IFS=, read -ra files <<<"$1"
+    for f in "${files[@]}"; do args+=(-f "$f"); done
+    helm template kagent oci://ghcr.io/kagent-dev/kagent/helm/kagent --version "$KAGENT_CHART_VERSION" \
+      -n "$NAMESPACE" "${args[@]}" \
+      --set database.postgres.readWriteConnectionStringSecretRef.name=diagnostic \
+      --set database.postgres.ownerConnectionStringSecretRef.name=diagnostic >/dev/null || true
+    die "kagent install failed"
+  fi
 }
 
 phase_kagent() {
