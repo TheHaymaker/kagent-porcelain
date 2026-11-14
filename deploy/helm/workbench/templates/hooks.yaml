@@ -1,0 +1,40 @@
+# kagent posts push notifications here, and the model gateway posts usage.
+# Cluster-internal only: there is no Ingress for it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: workbench-hooks
+  labels:
+    app.kubernetes.io/name: workbench-hooks
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kagent
+    app.kubernetes.io/instance: {{ .Values.kagent.release }}
+    app.kubernetes.io/component: controller
+  ports:
+    - name: hooks
+      port: {{ .Values.hooks.port }}
+      targetPort: {{ .Values.hooks.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: workbench-hooks
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kagent
+      app.kubernetes.io/instance: {{ .Values.kagent.release }}
+      app.kubernetes.io/component: controller
+  policyTypes: [Ingress]
+  ingress:
+    # The API port stays open to whatever kagent's chart allows; only the
+    # hooks port is narrowed, to this namespace (the controller itself and
+    # the model gateway).
+    - ports:
+        - port: 8083
+    - from:
+        - podSelector: {}
+      ports:
+        - port: {{ .Values.hooks.port }}

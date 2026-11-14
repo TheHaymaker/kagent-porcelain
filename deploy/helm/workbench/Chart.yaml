@@ -1,0 +1,6 @@
+apiVersion: v2
+name: workbench
+description: "Workbench pieces that kagent's chart does not cover - configuration, the hooks Service and the requester web app."
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

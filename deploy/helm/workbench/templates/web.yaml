@@ -1,0 +1,93 @@
+{{- if .Values.web.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workbench-web-config
+data:
+  config.json: |
+    {{- toJson .Values.web.runtimeConfig | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workbench-web
+  labels:
+    app.kubernetes.io/name: workbench-web
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: workbench-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: workbench-web
+      annotations:
+        checksum/config: {{ toJson .Values.web.runtimeConfig | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+      containers:
+        - name: web
+          image: {{ .Values.web.image }}
+          ports:
+            - containerPort: 8080
+          env:
+            # nginx proxies /api to the Workbench server, same origin as the app.
+            - name: API_UPSTREAM
+              value: http://{{ .Values.kagent.fullname }}-controller.{{ .Release.Namespace }}.svc:8083
+          volumeMounts:
+            - name: config
+              mountPath: /usr/share/nginx/html/config.json
+              subPath: config.json
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 128Mi }
+      volumes:
+        - name: config
+          configMap:
+            name: workbench-web-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workbench-web
+spec:
+  selector:
+    app.kubernetes.io/name: workbench-web
+  ports:
+    - port: 80
+      targetPort: 8080
+{{- if .Values.web.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: workbench-web
+  {{- with .Values.web.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.web.ingress.className }}
+  tls:
+    - hosts: [{{ .Values.web.host }}]
+      secretName: {{ .Values.web.ingress.tlsSecretName }}
+  rules:
+    - host: {{ .Values.web.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: workbench-web
+                port: { number: 80 }
+{{- end }}
+{{- end }}

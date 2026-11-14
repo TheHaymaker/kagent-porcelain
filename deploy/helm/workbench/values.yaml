@@ -1,0 +1,29 @@
+# The kagent release this chart sits beside.
+kagent:
+  # helm release name of kagent's chart
+  release: kagent
+  # kagent's fullname (the release name when it contains "kagent")
+  fullname: kagent
+
+# Rendered as /etc/workbench/workbench.yaml. See deploy/workbench.example.yaml.
+config: {}
+
+hooks:
+  port: 8090
+
+web:
+  enabled: true
+  replicas: 2
+  image: europe-docker.pkg.dev/acme-platform/workbench/workbench-web:0.1.0
+  host: workbench.example.com
+  # Served to the browser as /config.json.
+  runtimeConfig:
+    oidcIssuer: https://accounts.google.com
+    oidcClientId: workbench-web.apps.googleusercontent.com
+    apiBaseUrl: /api
+    defaultAgent: workbench-builders/workbench-builder
+  ingress:
+    enabled: true
+    className: gce
+    annotations: {}
+    tlsSecretName: workbench-tls

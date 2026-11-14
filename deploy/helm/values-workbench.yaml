@@ -1,0 +1,59 @@
+# Values for kagent's own Helm chart (oci://ghcr.io/kagent-dev/kagent/helm/kagent,
+# pinned to the release Workbench is built against) that turn its controller
+# into the Workbench server. Workbench does not fork kagent's chart: it swaps
+# the controller image and mounts its own configuration beside kagent's.
+#
+#   helm install kagent oci://ghcr.io/kagent-dev/kagent/helm/kagent \
+#     --namespace workbench --version <pinned> \
+#     -f deploy/helm/values-workbench.yaml -f your-overrides.yaml
+#   helm install workbench deploy/helm/workbench --namespace workbench -f your-overrides.yaml
+
+controller:
+  image:
+    registry: europe-docker.pkg.dev/acme-platform/workbench
+    repository: workbench-server
+    tag: "0.1.0"
+  serviceAccount:
+    annotations:
+      # Production Cloud Run deploys, BigQuery audit export and FCM run as this
+      # Google service account; agents and sandboxes never hold it.
+      iam.gke.io/gcp-service-account: workbench-server@acme-platform.iam.gserviceaccount.com
+  push:
+    signing:
+      # Workbench verifies every push notification; signing is required.
+      secretName: workbench-push-signing
+  volumes:
+    - name: workbench-config
+      configMap:
+        name: workbench-config
+    - name: workbench-secrets
+      secret:
+        secretName: workbench-secrets
+  volumeMounts:
+    - name: workbench-config
+      mountPath: /etc/workbench
+      readOnly: true
+    - name: workbench-secrets
+      mountPath: /var/run/secrets/workbench
+      readOnly: true
+  envFrom:
+    - secretRef:
+        name: workbench-smtp
+        optional: true
+
+config:
+  server:
+    auth:
+      # Ignored: Workbench supplies its own authenticator through the library
+      # options. Left at kagent's default so kagent's chart validates.
+      mode: insecure
+  push:
+    # The push callback is Workbench's in-cluster hooks listener.
+    allowHttp: true
+    allowPrivateNetworks: true
+    issuer: https://workbench.example.com
+
+ui:
+  # Platform engineers keep kagent's own UI for agents, models and tool
+  # servers. Expose it on an internal host only.
+  externalUrl: https://kagent.internal.example.com
