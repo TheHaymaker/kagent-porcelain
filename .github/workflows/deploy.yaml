@@ -42,7 +42,7 @@ jobs:
 
       - name: Service account key is present
         env:
-          KEY: ${{ secrets[inputs.secret_name] }}
+          KEY: ${{ secrets[inputs.secret_name] || secrets.GCP_SA_KEY_JSON }}
         run: |
           if [ -z "$KEY" ]; then
             echo "::error::No secret named '${{ inputs.secret_name }}' on the deploy environment. Re-run with secret_name set to the secret's name."
@@ -51,7 +51,7 @@ jobs:
 
       - uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets[inputs.secret_name] }}
+          credentials_json: ${{ secrets[inputs.secret_name] || secrets.GCP_SA_KEY_JSON }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
