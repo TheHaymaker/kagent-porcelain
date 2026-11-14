@@ -60,11 +60,9 @@ async function run(kind) {
   await page.getByRole("button", { name: "Send answer" }).click();
   await page.getByRole("button", { name: "Approve" }).waitFor({ timeout: 30000 });
   await shoot(page, `${kind}-conversation-ordinary-approval`);
-  if (process.env.DEBUG) await page.locator(".timeline-scroll").evaluate((el) => { window.__log = []; el.addEventListener("scroll", () => window.__log.push([Math.round(el.scrollTop), el.scrollHeight, el.clientHeight])); });
   await page.getByRole("button", { name: "Approve" }).click();
   await page.getByText("Waiting on Platform approvers", { exact: false }).first().waitFor({ timeout: 30000 });
   await page.waitForTimeout(800);
-  if (process.env.DEBUG) console.log(await page.locator(".timeline-scroll").evaluate((el) => [el.scrollTop, el.scrollHeight, el.clientHeight]), JSON.stringify(await page.evaluate(() => window.__log)));
   await shoot(page, `${kind}-conversation`);
   if (kind === "desktop") {
     await page.locator(".timeline-scroll").evaluate((el) => (el.scrollTop = el.scrollHeight * 0.35));
