@@ -16,6 +16,7 @@
 #                    WORKBENCH_ALLOWED_RANGES
 #   up.sh unexpose   back to private (port-forward) with the smoke test's issuer
 #   up.sh gitlab-find  list GitLab connections Google Cloud holds (read-only)
+#   up.sh gitlab-check what GITLAB_TOKEN acts as and can reach (read-only)
 #   up.sh all        every phase in order
 #   up.sh status     what is running
 #   up.sh down       delete the cluster (the registry and images stay)
@@ -728,6 +729,34 @@ PY
   echo "authorizerCredential is the token with the api scope; that is the one the builder needs."
 }
 
+# phase_gitlab_check verifies GITLAB_TOKEN against GITLAB_BASE_URL and lists
+# what it can reach. Read-only; the token is never printed.
+GITLAB_BASE_URL=${GITLAB_BASE_URL:-https://gitlab.com}
+gitlab_api() {
+  curl -s -o "$STATE/gitlab.json" -w '%{http_code}' -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$GITLAB_BASE_URL/api/v4/$1"
+}
+phase_gitlab_check() {
+  [[ -n ${GITLAB_TOKEN:-} ]] || die "GITLAB_TOKEN is not set (the deploy environment's GITLAB_TOKEN secret)"
+  [[ -n ${GITHUB_ACTIONS:-} ]] && echo "::add-mask::$GITLAB_TOKEN"
+  say "GitLab token at $GITLAB_BASE_URL"
+  local code
+  code=$(gitlab_api user)
+  [[ $code == 200 ]] || die "GET /user: HTTP $code $(head -c 200 "$STATE/gitlab.json")"
+  python3 -c 'import json,sys; u=json.load(open(sys.argv[1])); print(f"  acts as: {u[\"username\"]} (bot: {u.get(\"bot\", False)})")' "$STATE/gitlab.json"
+  code=$(gitlab_api personal_access_tokens/self)
+  [[ $code == 200 ]] && python3 -c 'import json,sys; t=json.load(open(sys.argv[1])); print(f"  scopes: {\",\".join(t.get(\"scopes\",[]))}; expires: {t.get(\"expires_at\")}")' "$STATE/gitlab.json"
+  code=$(gitlab_api "groups?min_access_level=30&per_page=100&order_by=path")
+  if [[ $code == 200 ]]; then
+    echo "  groups with Developer or higher:"
+    python3 -c 'import json,sys
+gs=json.load(open(sys.argv[1]))
+print("\n".join(f"    {g[\"full_path\"]}" for g in gs) or "    (none)")' "$STATE/gitlab.json"
+  else
+    echo "  groups: HTTP $code"
+  fi
+  rm -f "$STATE/gitlab.json"
+}
+
 phase_status() {
   kubeconfig
   kubectl -n "$NAMESPACE" get pods,svc
@@ -748,10 +777,11 @@ case ${1:-} in
   smoke) phase_check; phase_smoke ;;
   model) phase_check; phase_model ;;
   gitlab-find) phase_check; phase_gitlab_find ;;
+  gitlab-check) phase_gitlab_check ;;
   expose) phase_check; phase_expose ;;
   unexpose) phase_check; phase_unexpose ;;
   all) phase_check; phase_infra; phase_images; phase_kagent; phase_workbench; phase_smoke ;;
   status) phase_status ;;
   down) phase_down ;;
-  *) sed -n '2,30p' "$0"; exit 2 ;;
+  *) sed -n '2,31p' "$0"; exit 2 ;;
 esac
