@@ -385,8 +385,16 @@ phase_model() {
   gc iam service-accounts describe "$VERTEX_SA" >/dev/null 2>&1 ||
     gc iam service-accounts create workbench-vertex --display-name "Workbench agents: Vertex AI only" ||
     die "cannot create $VERTEX_SA: the deploying account needs Service Account Admin (roles/iam.serviceAccountAdmin)"
-  gc projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:$VERTEX_SA" \
-    --role roles/aiplatform.user --condition None >/dev/null ||
+  # A new service account takes a little while to be visible to IAM policy.
+  local try granted=
+  for try in 1 2 3 4 5 6; do
+    if gc projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:$VERTEX_SA" \
+      --role roles/aiplatform.user --condition None >/dev/null; then
+      granted=1; break
+    fi
+    sleep $((try * 5))
+  done
+  [[ -n $granted ]] ||
     die "cannot grant Vertex AI User to $VERTEX_SA. Either grant it yourself:
   gcloud projects add-iam-policy-binding $PROJECT_ID --member serviceAccount:$VERTEX_SA --role roles/aiplatform.user
 or give the deploying account Project IAM Admin (roles/resourcemanager.projectIamAdmin)."
