@@ -826,33 +826,36 @@ phase_tools() {
   echo "  builds repository, staging bucket (7-day lifecycle), build and preview service accounts"
 
   say "Roles (Workload Identity for the tool servers)"
-  grant_project() { # member role
+  # New service accounts take a little while to be visible to IAM policy.
+  retry() {
     local try
-    for try in 1 2 3 4 5 6; do
-      gc projects add-iam-policy-binding "$PROJECT_ID" --member "$1" --role "$2" --condition None >/dev/null 2>&1 && return 0
+    for try in 1 2 3 4 5 6 7 8; do
+      "$@" >/dev/null 2>"$STATE/iam.err" && { rm -f "$STATE/iam.err"; return 0; }
       sleep $((try * 5))
     done
-    die "cannot grant $2 to $1"
+    cat "$STATE/iam.err" >&2
+    die "failed after retries: $*"
   }
+  grant_project() { retry gc projects add-iam-policy-binding "$PROJECT_ID" --member "$1" --role "$2" --condition None; }
   grant_project "serviceAccount:$build_sa" roles/logging.logWriter
-  gc artifacts repositories add-iam-policy-binding builds --location "$REGION" \
-    --member "serviceAccount:$build_sa" --role roles/artifactregistry.writer >/dev/null
-  gcloud storage buckets add-iam-policy-binding "gs://$bucket" --member "serviceAccount:$build_sa" \
-    --role roles/storage.objectViewer >/dev/null
+  retry gc artifacts repositories add-iam-policy-binding builds --location "$REGION" \
+    --member "serviceAccount:$build_sa" --role roles/artifactregistry.writer
+  retry gcloud storage buckets add-iam-policy-binding "gs://$bucket" --member "serviceAccount:$build_sa" \
+    --role roles/storage.objectViewer
   # build-mcp: start builds as workbench-builds, write sources.
   grant_project "$pool/build-mcp" roles/cloudbuild.builds.editor
-  gcloud storage buckets add-iam-policy-binding "gs://$bucket" --member "$pool/build-mcp" \
-    --role roles/storage.objectCreator >/dev/null
-  gc iam service-accounts add-iam-policy-binding "$build_sa" --member "$pool/build-mcp" \
-    --role roles/iam.serviceAccountUser >/dev/null
+  retry gcloud storage buckets add-iam-policy-binding "gs://$bucket" --member "$pool/build-mcp" \
+    --role roles/storage.objectCreator
+  retry gc iam service-accounts add-iam-policy-binding "$build_sa" --member "$pool/build-mcp" \
+    --role roles/iam.serviceAccountUser
   # cloudrun-mcp: manage preview services running as workbench-preview, read their logs.
   grant_project "$pool/cloudrun-mcp" roles/run.admin
   grant_project "$pool/cloudrun-mcp" roles/logging.viewer
-  gc iam service-accounts add-iam-policy-binding "$preview_sa" --member "$pool/cloudrun-mcp" \
-    --role roles/iam.serviceAccountUser >/dev/null
+  retry gc iam service-accounts add-iam-policy-binding "$preview_sa" --member "$pool/cloudrun-mcp" \
+    --role roles/iam.serviceAccountUser
   # artifactregistry-mcp: read the builds repository.
-  gc artifacts repositories add-iam-policy-binding builds --location "$REGION" \
-    --member "$pool/artifactregistry-mcp" --role roles/artifactregistry.reader >/dev/null
+  retry gc artifacts repositories add-iam-policy-binding builds --location "$REGION" \
+    --member "$pool/artifactregistry-mcp" --role roles/artifactregistry.reader
   echo "  granted"
 
   say "Tool servers"
