@@ -8,7 +8,7 @@ on:
       phase:
         description: up.sh phase
         type: choice
-        options: [check, infra, images, kagent, workbench, smoke, model, expose, unexpose, all, status, down]
+        options: [check, infra, images, kagent, workbench, smoke, model, gitlab-find, expose, unexpose, all, status, down]
         default: check
       project_id:
         description: GCP project

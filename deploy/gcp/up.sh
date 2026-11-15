@@ -15,6 +15,7 @@
 #                    Armor allowlist (ADR 0005); needs WORKBENCH_ADMINS and
 #                    WORKBENCH_ALLOWED_RANGES
 #   up.sh unexpose   back to private (port-forward) with the smoke test's issuer
+#   up.sh gitlab-find  list GitLab connections Google Cloud holds (read-only)
 #   up.sh all        every phase in order
 #   up.sh status     what is running
 #   up.sh down       delete the cluster (the registry and images stay)
@@ -678,6 +679,55 @@ phase_unexpose() {
   phase_workbench
 }
 
+# phase_gitlab_find lists Google Cloud's GitLab connections (Developer
+# Connect and Cloud Build repositories) and the Secret Manager secrets they
+# reference. Read-only: it enables nothing and reads no secret values.
+phase_gitlab_find() {
+  local enabled api tok
+  enabled=$(gc services list --enabled --format 'value(config.name)')
+  tok=$(gcloud auth print-access-token)
+  say "GitLab connections in $PROJECT_ID"
+  local found=
+  for api in developerconnect cloudbuild; do
+    if ! grep -qx "$api.googleapis.com" <<<"$enabled"; then
+      echo "  $api.googleapis.com is not enabled; no connections there"
+      continue
+    fi
+    local url="https://developerconnect.googleapis.com/v1/projects/$PROJECT_ID/locations/-/connections"
+    [[ $api == cloudbuild ]] && url="https://cloudbuild.googleapis.com/v2/projects/$PROJECT_ID/locations/-/connections"
+    local code
+    code=$(curl -s -o "$STATE/conn.json" -w '%{http_code}' -H "Authorization: Bearer $tok" "$url")
+    if [[ $code != 200 ]]; then
+      echo "  $api: HTTP $code $(head -c 200 "$STATE/conn.json" | tr '\n' ' ')"
+      continue
+    fi
+    python3 - "$STATE/conn.json" "$api" <<'PY' && found=1 || true
+import json, sys
+data = json.load(open(sys.argv[1]))
+api = sys.argv[2]
+hits = 0
+for c in data.get("connections", []):
+    for kind in ("gitlabConfig", "gitlabEnterpriseConfig"):
+        g = c.get(kind)
+        if not g:
+            continue
+        hits += 1
+        print(f"  [{api}] {c['name']}")
+        print(f"      kind: {kind}, host: {g.get('hostUri', 'https://gitlab.com')}")
+        for role in ("authorizerCredential", "readAuthorizerCredential"):
+            cred = g.get(role) or {}
+            if cred:
+                print(f"      {role}: user={cred.get('username', '?')} secret={cred.get('userTokenSecretVersion', '?')}")
+        print(f"      state: {c.get('installationState', {}).get('stage', c.get('state', '?'))}, disabled: {c.get('disabled', False)}")
+sys.exit(0 if hits else 1)
+PY
+  done
+  rm -f "$STATE/conn.json"
+  [[ -n $found ]] || echo "  no GitLab connections found"
+  echo
+  echo "authorizerCredential is the token with the api scope; that is the one the builder needs."
+}
+
 phase_status() {
   kubeconfig
   kubectl -n "$NAMESPACE" get pods,svc
@@ -697,10 +747,11 @@ case ${1:-} in
   workbench) phase_check; phase_workbench ;;
   smoke) phase_check; phase_smoke ;;
   model) phase_check; phase_model ;;
+  gitlab-find) phase_check; phase_gitlab_find ;;
   expose) phase_check; phase_expose ;;
   unexpose) phase_check; phase_unexpose ;;
   all) phase_check; phase_infra; phase_images; phase_kagent; phase_workbench; phase_smoke ;;
   status) phase_status ;;
   down) phase_down ;;
-  *) sed -n '2,29p' "$0"; exit 2 ;;
+  *) sed -n '2,30p' "$0"; exit 2 ;;
 esac
