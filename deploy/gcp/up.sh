@@ -815,7 +815,9 @@ phase_tools() {
   gcloud storage buckets describe "gs://$bucket" >/dev/null 2>&1 ||
     gcloud storage buckets create "gs://$bucket" --project "$PROJECT_ID" --location "$REGION" \
       --uniform-bucket-level-access --public-access-prevention >/dev/null
-  gcloud storage buckets update "gs://$bucket" --lifecycle-file <(echo '{"rule":[{"action":{"type":"Delete"},"condition":{"age":7}}]}') >/dev/null
+  echo '{"rule":[{"action":{"type":"Delete"},"condition":{"age":7}}]}' > "$STATE/lifecycle.json"
+  gcloud storage buckets update "gs://$bucket" --lifecycle-file "$STATE/lifecycle.json" >/dev/null
+  rm -f "$STATE/lifecycle.json"
   local sa
   for sa in workbench-builds:"Workbench app image builds" workbench-preview:"Workbench preview apps (no roles)"; do
     gc iam service-accounts describe "${sa%%:*}@$PROJECT_ID.iam.gserviceaccount.com" >/dev/null 2>&1 ||
