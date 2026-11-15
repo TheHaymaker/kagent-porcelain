@@ -740,20 +740,33 @@ phase_gitlab_check() {
   [[ -n ${GITHUB_ACTIONS:-} ]] && echo "::add-mask::$GITLAB_TOKEN"
   say "GitLab token at $GITLAB_BASE_URL"
   local code
-  code=$(gitlab_api user)
-  [[ $code == 200 ]] || die "GET /user: HTTP $code $(head -c 200 "$STATE/gitlab.json")"
-  python3 -c 'import json,sys; u=json.load(open(sys.argv[1])); print(f"  acts as: {u[\"username\"]} (bot: {u.get(\"bot\", False)})")' "$STATE/gitlab.json"
-  code=$(gitlab_api personal_access_tokens/self)
-  [[ $code == 200 ]] && python3 -c 'import json,sys; t=json.load(open(sys.argv[1])); print(f"  scopes: {\",\".join(t.get(\"scopes\",[]))}; expires: {t.get(\"expires_at\")}")' "$STATE/gitlab.json"
-  code=$(gitlab_api "groups?min_access_level=30&per_page=100&order_by=path")
-  if [[ $code == 200 ]]; then
-    echo "  groups with Developer or higher:"
-    python3 -c 'import json,sys
-gs=json.load(open(sys.argv[1]))
-print("\n".join(f"    {g[\"full_path\"]}" for g in gs) or "    (none)")' "$STATE/gitlab.json"
-  else
-    echo "  groups: HTTP $code"
-  fi
+  local out="$STATE/gitlab-report"; mkdir -p "$out"
+  code=$(gitlab_api user); [[ $code == 200 ]] || die "GET /user: HTTP $code $(head -c 200 "$STATE/gitlab.json")"
+  mv "$STATE/gitlab.json" "$out/user.json"
+  gitlab_api personal_access_tokens/self >/dev/null; mv "$STATE/gitlab.json" "$out/token.json"
+  gitlab_api "groups?min_access_level=30&per_page=100&order_by=path" >/dev/null; mv "$STATE/gitlab.json" "$out/groups.json"
+  python3 - "$out" <<'PY'
+import json, os, sys
+d = sys.argv[1]
+def load(name):
+    try:
+        return json.load(open(os.path.join(d, name)))
+    except Exception:
+        return None
+u = load("user.json") or {}
+print("  acts as: %s (bot: %s)" % (u.get("username"), u.get("bot", False)))
+t = load("token.json")
+if isinstance(t, dict) and "scopes" in t:
+    print("  scopes: %s; expires: %s" % (",".join(t["scopes"]), t.get("expires_at")))
+g = load("groups.json")
+print("  groups with Developer or higher:")
+if isinstance(g, list) and g:
+    for x in g:
+        print("    " + x["full_path"])
+else:
+    print("    (none)")
+PY
+  rm -rf "$out"
   rm -f "$STATE/gitlab.json"
 }
 
