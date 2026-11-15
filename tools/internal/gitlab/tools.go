@@ -1,15 +1,19 @@
 package gitlab
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/thehaymaker/kagent-porcelain/tools/internal/httpx"
 	"github.com/thehaymaker/kagent-porcelain/tools/internal/mcpx"
 	"github.com/thehaymaker/kagent-porcelain/tools/internal/validate"
 )
@@ -48,6 +52,16 @@ func Register(s *mcpx.Server, c *Client) {
 		Description: "List branches of a Workbench project (paginated; pass next_page back as page).",
 		Annotations: mcpx.ReadOnly("List GitLab branches", false),
 	}, c.listBranches)
+	mcpx.AddTool(s, &mcp.Tool{
+		Name:        "gitlab_list_files",
+		Description: "List file paths in a Workbench project at a ref (default branch by default), optionally under a directory. Recursive, paginated.",
+		Annotations: mcpx.ReadOnly("List files", false),
+	}, c.listFiles)
+	mcpx.AddTool(s, &mcp.Tool{
+		Name:        "gitlab_get_file",
+		Description: "Read one text file from a Workbench project at a ref (default branch by default). Files over 256 KiB or binary files are refused.",
+		Annotations: mcpx.ReadOnly("Read file", false),
+	}, c.getFile)
 	mcpx.AddTool(s, &mcp.Tool{
 		Name:        "gitlab_create_branch",
 		Description: "Create a branch in a Workbench project from a ref (branch, tag or commit; defaults to the default branch).",
@@ -542,4 +556,110 @@ func (c *Client) getPipelineStatus(ctx context.Context, _ mcpx.Call, in Pipeline
 		out.Jobs = append(out.Jobs, j.Job)
 	}
 	return out, nil
+}
+
+// ListFilesIn are the arguments of gitlab_list_files.
+type ListFilesIn struct {
+	Project string `json:"project" jsonschema:"project name or full path"`
+	Ref     string `json:"ref,omitempty" jsonschema:"branch, tag or commit SHA (default: the default branch)"`
+	Path    string `json:"path,omitempty" jsonschema:"directory to list under (default: the repository root)"`
+	Page    int    `json:"page,omitempty"`
+}
+
+// ListFilesOut is the result of gitlab_list_files.
+type ListFilesOut struct {
+	Files    []string `json:"files"`
+	NextPage int      `json:"next_page,omitempty"`
+}
+
+func (c *Client) listFiles(ctx context.Context, _ mcpx.Call, in ListFilesIn) (ListFilesOut, error) {
+	p, err := c.resolve(ctx, in.Project)
+	if err != nil {
+		return ListFilesOut{}, err
+	}
+	q := url.Values{"recursive": {"true"}, "per_page": {strconv.Itoa(MaxPerPage)}, "page": {strconv.Itoa(max(in.Page, 1))}}
+	if in.Ref != "" {
+		if err := validate.GitRefName("ref", in.Ref); err != nil && !shaRe.MatchString(in.Ref) {
+			return ListFilesOut{}, err
+		}
+		q.Set("ref", in.Ref)
+	}
+	if in.Path != "" {
+		if err := validate.RepoPath("path", in.Path); err != nil {
+			return ListFilesOut{}, err
+		}
+		q.Set("path", in.Path)
+	}
+	var tree []struct {
+		Path string `json:"path"`
+		Type string `json:"type"`
+	}
+	h, err := c.do(ctx, http.MethodGet, "/projects/"+pid(p)+"/repository/tree", q, nil, &tree)
+	if err != nil {
+		return ListFilesOut{}, err
+	}
+	out := ListFilesOut{Files: []string{}, NextPage: nextPage(h)}
+	for _, t := range tree {
+		if t.Type == "blob" {
+			out.Files = append(out.Files, t.Path)
+		}
+	}
+	return out, nil
+}
+
+// GetFileIn are the arguments of gitlab_get_file.
+type GetFileIn struct {
+	Project string `json:"project" jsonschema:"project name or full path"`
+	Path    string `json:"path" jsonschema:"file path relative to the repository root"`
+	Ref     string `json:"ref,omitempty" jsonschema:"branch, tag or commit SHA (default: the default branch)"`
+}
+
+// GetFileOut is the result of gitlab_get_file.
+type GetFileOut struct {
+	Path    string `json:"path"`
+	Ref     string `json:"ref"`
+	Content string `json:"content"`
+}
+
+// MaxFileBytes bounds gitlab_get_file.
+const MaxFileBytes = 256 << 10
+
+func (c *Client) getFile(ctx context.Context, _ mcpx.Call, in GetFileIn) (GetFileOut, error) {
+	if err := validate.RepoPath("path", in.Path); err != nil {
+		return GetFileOut{}, err
+	}
+	p, err := c.resolve(ctx, in.Project)
+	if err != nil {
+		return GetFileOut{}, err
+	}
+	ref := in.Ref
+	if ref == "" {
+		ref = p.DefaultBranch
+	}
+	if err := validate.GitRefName("ref", ref); err != nil && !shaRe.MatchString(ref) {
+		return GetFileOut{}, err
+	}
+	var f struct {
+		Size     int    `json:"size"`
+		Encoding string `json:"encoding"`
+		Content  string `json:"content"`
+	}
+	q := url.Values{"ref": {ref}}
+	if _, err := c.do(ctx, http.MethodGet, "/projects/"+pid(p)+"/repository/files/"+url.PathEscape(in.Path), q, nil, &f); err != nil {
+		if httpx.IsNotFound(err) {
+			return GetFileOut{}, fmt.Errorf("%s not found at %s", in.Path, ref)
+		}
+		return GetFileOut{}, err
+	}
+	if f.Size > MaxFileBytes {
+		return GetFileOut{}, fmt.Errorf("%s is %d bytes; files over %d bytes are not returned", in.Path, f.Size, MaxFileBytes)
+	}
+	data, err := base64.StdEncoding.DecodeString(f.Content)
+	if err != nil || f.Encoding != "base64" {
+		return GetFileOut{}, fmt.Errorf("unexpected encoding for %s", in.Path)
+	}
+	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
+		return GetFileOut{}, fmt.Errorf("%s is not a text file", in.Path)
+	}
+	return GetFileOut{Path: in.Path, Ref: ref, Content: string(data)}, nil
 }

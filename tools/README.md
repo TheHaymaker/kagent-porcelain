@@ -8,7 +8,7 @@ sandbox.
 
 | Binary | Upstream API | Tools |
 | --- | --- | --- |
-| `cmd/gitlab-mcp` | GitLab REST v4 | 7 |
+| `cmd/gitlab-mcp` | GitLab REST v4 | 9 |
 | `cmd/cloudrun-mcp` | Cloud Run Admin v2, Cloud Logging v2 | 6 |
 | `cmd/artifactregistry-mcp` | Artifact Registry v1 | 3 (read-only) |
 | `cmd/bigquery-mcp` | BigQuery v2 | 7 |
@@ -127,6 +127,8 @@ the group. Writes then use the numeric id.
 | `gitlab_create_project` | Fork `<template-group>/<template>` into the group as a private project (`mr_default_target_self`); returns `import_status` | no | no | no | no | no |
 | `gitlab_get_project` | id, path, URL, default branch, import status, fork origin | yes | no | yes | no | no |
 | `gitlab_list_branches` | branches with `next_page` pagination (max 100/page) | yes | no | yes | no | no |
+| `gitlab_list_files` | file paths at a ref, recursive, optionally under a directory, paginated | yes | no | yes | no | no |
+| `gitlab_get_file` | one text file at a ref (≤256 KiB; binary refused) | yes | no | yes | no | no |
 | `gitlab_create_branch` | branch from ref (default: default branch) | no | no | no | no | no |
 | `gitlab_commit_files` | one commit with ≤100 create/update/delete/move actions, ≤5 MiB; text or base64; appends `Workbench-Requester` trailer | no | yes | no | no | no |
 | `gitlab_create_merge_request` | MR within the same project (`target_project_id` pinned, never the template upstream); optional draft | no | no | no | no | no |

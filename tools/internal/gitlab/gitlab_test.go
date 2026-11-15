@@ -121,6 +121,8 @@ func TestToolsAndAnnotations(t *testing.T) {
 		"gitlab_create_project":       {ReadOnly: false, Destructive: false, Idempotent: false, OpenWorld: false},
 		"gitlab_get_project":          {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
 		"gitlab_list_branches":        {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
+		"gitlab_list_files":           {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
+		"gitlab_get_file":             {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
 		"gitlab_create_branch":        {ReadOnly: false, Destructive: false, Idempotent: false, OpenWorld: false},
 		"gitlab_commit_files":         {ReadOnly: false, Destructive: true, Idempotent: false, OpenWorld: false},
 		"gitlab_create_merge_request": {ReadOnly: false, Destructive: false, Idempotent: false, OpenWorld: false},
@@ -447,4 +449,36 @@ func TestStripTopDir(t *testing.T) {
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("entries %v, want %v", names, want)
 	}
+}
+
+func TestListAndReadFiles(t *testing.T) {
+	f, cs := setup(t)
+	f.handlers["GET /api/v4/projects/42/repository/tree"] = func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"path": "app", "type": "tree"}, {"path": "app/main.py", "type": "blob"}, {"path": "Dockerfile", "type": "blob"},
+		})
+	}
+	var files ListFilesOut
+	mcpxtest.MustOK(t, cs, "gitlab_list_files", map[string]any{"project": "my-app"}, &files)
+	if strings.Join(files.Files, ",") != "app/main.py,Dockerfile" {
+		t.Fatalf("files %v", files.Files)
+	}
+	if q := f.last().Query; !strings.Contains(q, "recursive=true") {
+		t.Fatalf("not recursive: %s", q)
+	}
+
+	f.handlers["GET /api/v4/projects/42/repository/files/app%2Fmain.py"] = func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"size": 9, "encoding": "base64", "content": "cHJpbnQoMSkK"})
+	}
+	var file GetFileOut
+	mcpxtest.MustOK(t, cs, "gitlab_get_file", map[string]any{"project": "my-app", "path": "app/main.py", "ref": "main"}, &file)
+	if file.Content != "print(1)\n" {
+		t.Fatalf("content %q", file.Content)
+	}
+
+	f.handlers["GET /api/v4/projects/42/repository/files/logo.png"] = func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"size": 4, "encoding": "base64", "content": "iVBORw=="})
+	}
+	mcpxtest.MustErr(t, cs, "gitlab_get_file", map[string]any{"project": "my-app", "path": "logo.png", "ref": "main"}, "not a text file")
+	mcpxtest.MustErr(t, cs, "gitlab_get_file", map[string]any{"project": "my-app", "path": "../secrets", "ref": "main"}, "path")
 }

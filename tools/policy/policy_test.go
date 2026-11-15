@@ -9,6 +9,7 @@ import (
 
 	"github.com/thehaymaker/kagent-porcelain/tools/internal/artifactregistry"
 	"github.com/thehaymaker/kagent-porcelain/tools/internal/bigquery"
+	"github.com/thehaymaker/kagent-porcelain/tools/internal/build"
 	"github.com/thehaymaker/kagent-porcelain/tools/internal/cloudrun"
 	"github.com/thehaymaker/kagent-porcelain/tools/internal/gitlab"
 	"github.com/thehaymaker/kagent-porcelain/tools/internal/mcpx"
@@ -23,6 +24,13 @@ func servers(t *testing.T) map[string]*mcpx.Server {
 	s := mk("gitlab-mcp")
 	gitlab.Register(s, gitlab.NewClient(gitlab.Config{BaseURL: "https://g", AllowedGroup: "a", TemplateGroup: "b"}, nil, nil))
 	out["gitlab-mcp"] = s
+	s = mk("build-mcp")
+	bc := build.Config{Project: "wb-builds", Location: "europe-west1", Repository: "builds", Bucket: "wb-src", ServiceAccount: "b@wb-builds.iam.gserviceaccount.com"}
+	if err := bc.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	build.Register(s, build.NewClient(bc, nil, nil))
+	out["build-mcp"] = s
 	s = mk("cloudrun-mcp")
 	crc := cloudrun.Config{PreviewProject: "wb-preview", Region: "europe-west1", ImagePrefix: "europe-west1-docker.pkg.dev/p/r/"}
 	if err := crc.Validate(); err != nil {
