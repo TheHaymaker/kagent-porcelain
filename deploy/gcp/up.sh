@@ -20,6 +20,7 @@
 #   up.sh gitlab-setup GitLab group, apps/templates subgroups, scaffolds
 #   up.sh tools      builds repo, buckets, service accounts and the builder's
 #                    tool servers (needs gitlab-setup)
+#   up.sh builder    the Gemini builder agent (needs model and tools)
 #   up.sh all        every phase in order
 #   up.sh status     what is running
 #   up.sh down       delete the cluster (the registry and images stay)
@@ -528,7 +529,7 @@ W
     backendConfig: {securityPolicy: workbench-allowlist}
   runtimeConfig:
     apiBaseUrl: /api
-    defaultAgent: $NAMESPACE/workbench-gemini-check
+    defaultAgent: $NAMESPACE/workbench-builder
     authProvider: identity-platform
     identityPlatform:
       apiKey: $(<"$STATE/secrets/browser-api-key")
@@ -871,6 +872,30 @@ phase_tools() {
   [[ -n $ok ]] || die "a tool server did not start (logs above)"
 }
 
+# phase_builder deploys the Gemini builder agent (needs model and tools).
+phase_builder() {
+  kubeconfig
+  kubectl -n "$NAMESPACE" get modelconfig workbench-gemini >/dev/null 2>&1 || die "run up.sh model first"
+  kubectl -n "$NAMESPACE" get remotemcpserver gitlab-mcp >/dev/null 2>&1 || die "run up.sh tools first"
+  say "Builder agent (Gemini)"
+  kubectl -n "$NAMESPACE" create configmap workbench-builder-prompt \
+    --from-file=builder.md="$ROOT/deploy/agents/builder-gemini.md" --dry-run=client -o yaml | kubectl apply -f -
+  NAMESPACE=$NAMESPACE python3 -c 'import os,string,sys; print(string.Template(sys.stdin.read()).substitute(os.environ))' \
+    < "$ROOT/deploy/agents/builder-gemini.yaml.tmpl" | kubectl apply -f -
+  if ! kubectl -n "$NAMESPACE" wait agent/workbench-builder --for=condition=Ready --timeout 5m; then
+    kubectl -n "$NAMESPACE" get agent workbench-builder -o jsonpath='{.status}' >&2; echo >&2
+    kubectl -n "$NAMESPACE" get agenttemplate workbench-builder -o jsonpath='{.status}' >&2; echo >&2
+    local r
+    for r in workbench-api gitlab-mcp build-mcp artifactregistry-mcp cloudrun-mcp; do
+      echo "--- remotemcpserver/$r" >&2
+      kubectl -n "$NAMESPACE" get remotemcpserver "$r" -o jsonpath='{.status.conditions}' >&2 || true; echo >&2
+    done
+    return 1
+  fi
+  load_exposure
+  [[ -n $EXPOSED ]] && echo "The builder is the web app's default agent at https://$EXPOSE_HOST (after the next workbench or expose run)."
+}
+
 phase_status() {
   kubeconfig
   kubectl -n "$NAMESPACE" get pods,svc
@@ -894,10 +919,11 @@ case ${1:-} in
   gitlab-check) phase_gitlab_check ;;
   gitlab-setup) phase_gitlab_setup ;;
   tools) phase_check; phase_tools ;;
+  builder) phase_check; phase_builder ;;
   expose) phase_check; phase_expose ;;
   unexpose) phase_check; phase_unexpose ;;
   all) phase_check; phase_infra; phase_images; phase_kagent; phase_workbench; phase_smoke ;;
   status) phase_status ;;
   down) phase_down ;;
-  *) sed -n '2,34p' "$0"; exit 2 ;;
+  *) sed -n '2,35p' "$0"; exit 2 ;;
 esac

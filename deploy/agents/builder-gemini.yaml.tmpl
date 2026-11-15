@@ -1,0 +1,44 @@
+# The Workbench builder on Gemini (deploy/agents/builder-gemini.md), for the
+# GKE test cluster. Rendered by deploy/gcp/up.sh: ${NAMESPACE}.
+#
+# The full builder pack in agents/ targets kagent's Claude harness with a
+# shell, skills and a reviewer subagent. This one runs on kagent's default
+# harness with the workbench-gemini model and works only through tools:
+# Workbench's own, GitLab (files and projects in the apps group), build
+# (Cloud Build), Cloud Run previews (every call needs approval) and the
+# builds repository.
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: workbench-builder
+  namespace: ${NAMESPACE}
+  labels: {app.kubernetes.io/part-of: workbench}
+spec:
+  description: Builds small internal apps from Workbench templates and deploys test versions to Cloud Run.
+  modelConfig: {name: workbench-gemini}
+  systemPromptFrom:
+    name: workbench-builder-prompt
+    key: builder.md
+  tools:
+    - mcp:
+        server: {kind: RemoteMCPServer, name: workbench-api}
+    - mcp:
+        server: {kind: RemoteMCPServer, name: gitlab-mcp}
+    - mcp:
+        server: {kind: RemoteMCPServer, name: build-mcp}
+    - mcp:
+        server: {kind: RemoteMCPServer, name: artifactregistry-mcp}
+    - mcp:
+        server: {kind: RemoteMCPServer, name: cloudrun-mcp}
+        requireApproval: true
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata:
+  name: workbench-builder
+  namespace: ${NAMESPACE}
+  labels: {app.kubernetes.io/part-of: workbench}
+spec:
+  template:
+    ref: {name: workbench-builder}
+  harnessRef: {name: kagent-default}
