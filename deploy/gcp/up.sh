@@ -9,7 +9,7 @@
 #   up.sh workbench  secrets, configuration, database grants, then kagent's
 #                    chart again with the Workbench overlay
 #   up.sh smoke      the end-to-end smoke test (server/cmd/workbench-smoke)
-#   up.sh model      Gemini (API key) as a real model, and a one-turn
+#   up.sh model      Gemini on Vertex AI as a real model, and a one-turn
 #                    real-model check (workbench-smoke chat)
 #   up.sh all        every phase in order
 #   up.sh status     what is running
@@ -349,77 +349,101 @@ smoke_api() {
 }
 
 GEMINI_CANDIDATES=${GEMINI_CANDIDATES:-"gemini-3-flash gemini-3-flash-preview gemini-2.5-flash"}
-GEMINI_KEY_NAME=workbench-gemini
+VERTEX_SA="workbench-vertex@${PROJECT_ID}.iam.gserviceaccount.com"
+VERTEX_KEY_NAME=workbench-vertex-key
+# kagent's Gemini client appends /models/{model}:generateContent to this.
+GEMINI_BASE_URL="https://aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/global/publishers/google"
 
-# gemini_answers reports whether a model answers on the Gemini API with the
-# key in $1, which proves the key works and the model exists.
+# gemini_answers reports whether a model answers on Vertex AI with the API
+# key in $1, which proves the key, its service account's role and the model.
 gemini_answers() {
   local key=$1 model=$2 code
   code=$(curl -s -o "$STATE/gemini-probe.json" -w '%{http_code}' -X POST \
     -H "x-goog-api-key: $key" -H 'Content-Type: application/json' \
-    "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent" \
+    "$GEMINI_BASE_URL/models/$model:generateContent" \
     -d '{"contents":[{"role":"user","parts":[{"text":"Reply with OK."}]}]}')
   [[ $code == 200 ]] && return 0
   echo "  $model: HTTP $code $(head -c 300 "$STATE/gemini-probe.json" | tr '\n' ' ')" >&2
   return 1
 }
 
-# remove_vertex_sa undoes an earlier attempt that gave agents a Vertex AI
-# service account key: kagent cannot mount key files into Substrate actors.
-remove_vertex_sa() {
-  local sa="workbench-vertex@${PROJECT_ID}.iam.gserviceaccount.com"
-  gc iam service-accounts describe "$sa" >/dev/null 2>&1 || return 0
-  say "Removing the unused workbench-vertex service account and its key"
-  gc projects remove-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:$sa" \
-    --role roles/aiplatform.user --condition None >/dev/null 2>&1 || true
-  gc iam service-accounts delete "$sa"
-  rm -f "$STATE/secrets/vertex-key.json"
-  kubectl -n "$NAMESPACE" delete secret workbench-vertex --ignore-not-found
+# revoke_keys deletes every API key with the given display name. Key
+# operations never print their result: gcloud's includes the key string.
+revoke_keys() {
+  local name
+  for name in $(gc services api-keys list --filter "displayName=$1" --format 'value(name)' 2>/dev/null); do
+    gc services api-keys delete "$name" >/dev/null 2>&1 && echo "  revoked API key $name ($1)"
+  done
 }
 
 phase_model() {
   kubeconfig
   mkdir -p "$STATE/secrets"
-  remove_vertex_sa
+  gc services enable apikeys.googleapis.com aiplatform.googleapis.com iam.googleapis.com >/dev/null
 
-  # Substrate injects the key into the agent's model requests at its egress
-  # proxy (x-goog-api-key to generativelanguage.googleapis.com), so the key
-  # never enters the actor. Vertex AI would need a mounted key file or the
-  # GKE metadata server, neither of which a Substrate actor has.
-  say "Gemini API key (restricted to the Gemini API)"
-  gc services enable apikeys.googleapis.com generativelanguage.googleapis.com
-  local keyfile="$STATE/secrets/gemini-api-key" name
-  if [[ ! -s $keyfile ]]; then
-    name=$(gc services api-keys list --filter "displayName=$GEMINI_KEY_NAME" --format 'value(name)' | head -1)
-    if [[ -z $name ]]; then
-      name=$(gc services api-keys create --display-name "$GEMINI_KEY_NAME" \
-        --api-target service=generativelanguage.googleapis.com --format 'value(response.name)') ||
-        die "cannot create an API key: the deploying account needs API Keys Admin (roles/serviceusage.apiKeysAdmin)"
+  # An earlier version created a Gemini API key and its gcloud output put the
+  # key in a job log. Revoke any such key; Vertex AI replaces it.
+  revoke_keys workbench-gemini
+  rm -f "$STATE/secrets/gemini-api-key"
+  kubectl -n "$NAMESPACE" delete secret workbench-vertex --ignore-not-found >/dev/null
+
+  # Substrate actors have neither the GKE metadata server nor support for a
+  # mounted key file, so Vertex AI's usual credentials are out. A Vertex AI
+  # API key bound to a service account works instead: Substrate's egress
+  # proxy adds it to the agent's requests as x-goog-api-key, so it never
+  # enters the actor, and it bills through the project's Cloud Billing.
+  say "Service account for agents' model calls (Vertex AI User only)"
+  gc iam service-accounts describe "$VERTEX_SA" >/dev/null 2>&1 ||
+    gc iam service-accounts create workbench-vertex --display-name "Workbench agents: Vertex AI only" ||
+    die "cannot create $VERTEX_SA: the deploying account needs Service Account Admin (roles/iam.serviceAccountAdmin)"
+  local try granted=
+  for try in 1 2 3 4 5 6; do
+    if gc projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:$VERTEX_SA" \
+      --role roles/aiplatform.user --condition None >/dev/null 2>&1; then
+      granted=1; break
     fi
-    (umask 077; gc services api-keys get-key-string "$name" --format 'value(keyString)' > "$keyfile")
+    sleep $((try * 5))
+  done
+  [[ -n $granted ]] || die "cannot grant Vertex AI User to $VERTEX_SA (the deploying account needs Project IAM Admin)"
+
+  say "Vertex AI API key bound to $VERTEX_SA"
+  local keyfile="$STATE/secrets/vertex-api-key" name
+  if [[ ! -s $keyfile ]]; then
+    revoke_keys "$VERTEX_KEY_NAME"
+    name=$(gc services api-keys create --display-name "$VERTEX_KEY_NAME" \
+      --api-target service=aiplatform.googleapis.com --service-account "$VERTEX_SA" \
+      --format 'value(response.name)' 2>"$STATE/apikey.err") || {
+      grep -v -i keystring "$STATE/apikey.err" >&2; rm -f "$STATE/apikey.err"
+      die "cannot create a Vertex AI API key bound to $VERTEX_SA (error above). The deploying account needs
+  API Keys Admin, and the organization policy must allow API keys bound to service accounts."
+    }
+    rm -f "$STATE/apikey.err"
+    (umask 077; gc services api-keys get-key-string "$name" --format 'value(keyString)' > "$keyfile" 2>/dev/null)
   fi
   local key
   key=$(<"$keyfile")
+  [[ -n ${GITHUB_ACTIONS:-} ]] && echo "::add-mask::$key"
 
   if [[ -z ${GEMINI_MODEL:-} ]]; then
-    local m try
-    # A new key can take a minute to work.
-    for try in 1 2 3 4; do
+    local m
+    # A new key, and a new role binding, can take a minute or two to work.
+    for try in 1 2 3 4 5 6; do
       for m in $GEMINI_CANDIDATES; do
         if gemini_answers "$key" "$m"; then GEMINI_MODEL=$m; break 2; fi
       done
       sleep 20
     done
-    [[ -n ${GEMINI_MODEL:-} ]] || die "none of [$GEMINI_CANDIDATES] answered on the Gemini API (errors above); set GEMINI_MODEL"
+    [[ -n ${GEMINI_MODEL:-} ]] || die "none of [$GEMINI_CANDIDATES] answered on Vertex AI (errors above); set GEMINI_MODEL"
   else
-    gemini_answers "$key" "$GEMINI_MODEL" || die "$GEMINI_MODEL did not answer on the Gemini API (error above)"
+    gemini_answers "$key" "$GEMINI_MODEL" || die "$GEMINI_MODEL did not answer on Vertex AI (error above)"
   fi
   echo "  using $GEMINI_MODEL"
+  kubectl -n "$NAMESPACE" delete secret workbench-gemini --ignore-not-found >/dev/null
   kubectl -n "$NAMESPACE" create secret generic workbench-gemini --from-file=GOOGLE_API_KEY="$keyfile" \
     --dry-run=client -o yaml | kubectl apply -f -
 
   say "Model and check agent"
-  NAMESPACE=$NAMESPACE GEMINI_MODEL=$GEMINI_MODEL \
+  NAMESPACE=$NAMESPACE GEMINI_MODEL=$GEMINI_MODEL GEMINI_BASE_URL=$GEMINI_BASE_URL \
     python3 -c 'import os,string,sys; print(string.Template(sys.stdin.read()).substitute(os.environ))' \
     < "$ROOT/deploy/model/gemini.yaml.tmpl" | kubectl apply -f -
   if ! kubectl -n "$NAMESPACE" wait agent/workbench-gemini-check --for=condition=Ready --timeout 5m; then
