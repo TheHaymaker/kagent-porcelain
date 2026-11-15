@@ -1,6 +1,9 @@
 package gitlab
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -399,5 +402,49 @@ func TestConfigValidate(t *testing.T) {
 		if c.Validate() == nil {
 			t.Errorf("expected error for %+v", c)
 		}
+	}
+}
+
+func TestStripTopDir(t *testing.T) {
+	var in bytes.Buffer
+	zw := gzip.NewWriter(&in)
+	tw := tar.NewWriter(zw)
+	add := func(name string, typ byte, body string) {
+		_ = tw.WriteHeader(&tar.Header{Name: name, Typeflag: typ, Mode: 0o644, Size: int64(len(body))})
+		if body != "" {
+			_, _ = tw.Write([]byte(body))
+		}
+	}
+	add("app-abc123/", tar.TypeDir, "")
+	add("app-abc123/Dockerfile", tar.TypeReg, "FROM scratch\n")
+	add("app-abc123/src/main.py", tar.TypeReg, "print(1)\n")
+	add("app-abc123/link", tar.TypeSymlink, "")
+	add("app-abc123/../escape", tar.TypeReg, "x")
+	_ = tw.Close()
+	_ = zw.Close()
+
+	out, err := stripTopDir(&in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(zr)
+	var names []string
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, h.Name)
+	}
+	want := []string{"Dockerfile", "src/main.py"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("entries %v, want %v", names, want)
 	}
 }

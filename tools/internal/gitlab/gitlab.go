@@ -5,9 +5,13 @@
 package gitlab
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -204,4 +208,119 @@ func pid(p apiProject) string { return strconv.Itoa(p.ID) }
 func nextPage(h http.Header) int {
 	n, _ := strconv.Atoi(h.Get("X-Next-Page"))
 	return n
+}
+
+// Snapshot is one commit of a Workbench project as a build context.
+type Snapshot struct {
+	Project string // full path, inside the allowed group
+	Name    string // last path segment
+	SHA     string
+	Tarball []byte // gzipped tar of the tree, rooted at the repository root
+}
+
+// MaxSnapshotBytes bounds a project's source archive.
+const MaxSnapshotBytes = 50 << 20
+
+// Source fetches a project's tree at ref (branch, tag or SHA) as a gzipped
+// tarball rooted at the repository root, for the build server. The project
+// must be inside the allowed group, as for every other tool.
+func (c *Client) Source(ctx context.Context, project, ref string) (Snapshot, error) {
+	p, err := c.resolve(ctx, project)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if ref == "" {
+		ref = p.DefaultBranch
+	}
+	if err := validate.GitRefName("ref", ref); err != nil && !shaRe.MatchString(ref) {
+		return Snapshot{}, err
+	}
+	var commit struct {
+		ID string `json:"id"`
+	}
+	if _, err := c.do(ctx, http.MethodGet, "/projects/"+pid(p)+"/repository/commits/"+url.PathEscape(ref), nil, nil, &commit); err != nil {
+		return Snapshot{}, fmt.Errorf("resolving %s@%s: %w", p.PathWithNamespace, ref, err)
+	}
+	if !shaRe.MatchString(commit.ID) {
+		return Snapshot{}, fmt.Errorf("unexpected commit id for %s@%s", p.PathWithNamespace, ref)
+	}
+	tok, err := c.token()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.cfg.BaseURL+"/api/v4/projects/"+pid(p)+"/repository/archive.tar.gz?sha="+commit.ID, nil)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	req.Header.Set("Private-Token", tok)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("downloading the archive: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return Snapshot{}, fmt.Errorf("downloading the archive: HTTP %d", resp.StatusCode)
+	}
+	tarball, err := stripTopDir(io.LimitReader(resp.Body, MaxSnapshotBytes+1))
+	if err != nil {
+		return Snapshot{}, err
+	}
+	name := p.PathWithNamespace[strings.LastIndex(p.PathWithNamespace, "/")+1:]
+	return Snapshot{Project: p.PathWithNamespace, Name: name, SHA: commit.ID, Tarball: tarball}, nil
+}
+
+var shaRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// stripTopDir rewrites GitLab's archive (everything under one
+// "<project>-<sha>/" directory) so the repository root is the tar root, which
+// is what a Docker build context needs. Links and special files are dropped.
+func stripTopDir(r io.Reader) ([]byte, error) {
+	zr, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("reading the archive: %w", err)
+	}
+	tr := tar.NewReader(zr)
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	var total int64
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading the archive: %w", err)
+		}
+		_, rest, ok := strings.Cut(h.Name, "/")
+		if !ok || rest == "" || strings.Contains(rest, "..") {
+			continue
+		}
+		switch h.Typeflag {
+		case tar.TypeDir, tar.TypeReg:
+		default:
+			continue
+		}
+		total += h.Size
+		if total > MaxSnapshotBytes {
+			return nil, fmt.Errorf("the project's source is larger than %d bytes", MaxSnapshotBytes)
+		}
+		out := &tar.Header{Name: rest, Mode: h.Mode & 0o755, Size: h.Size, Typeflag: h.Typeflag, ModTime: h.ModTime}
+		if err := tw.WriteHeader(out); err != nil {
+			return nil, err
+		}
+		if h.Typeflag == tar.TypeReg {
+			if _, err := io.CopyN(tw, tr, h.Size); err != nil {
+				return nil, fmt.Errorf("reading the archive: %w", err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
