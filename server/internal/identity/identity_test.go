@@ -225,3 +225,30 @@ func TestKeysFromFile(t *testing.T) {
 		t.Fatalf("groups %v", g)
 	}
 }
+
+func TestEmailGroups(t *testing.T) {
+	c := newSigner(t)
+	a, err := New([]Issuer{{Kind: Company, URL: company, Audiences: []string{"workbench"},
+		EmailGroups: map[string][]string{"Alice@Example.com": {"approvers", "requesters"}}}},
+		staticKeys{company: c.set}, &fakeLinks{}, []byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := func(claims map[string]any) []string {
+		claims["iss"], claims["aud"], claims["exp"] = company, "workbench", time.Now().Add(time.Hour).Unix()
+		s, err := a.Authenticate(context.Background(), header(c.token(t, claims)), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return FromPrincipal(s.Principal()).Groups
+	}
+	if g := groups(map[string]any{"sub": "a", "email": "alice@example.com", "email_verified": true, "groups": []string{"requesters"}}); len(g) != 2 {
+		t.Fatalf("verified, mapped email: %v", g)
+	}
+	if g := groups(map[string]any{"sub": "a", "email": "alice@example.com"}); len(g) != 0 {
+		t.Fatalf("unverified email must not be mapped: %v", g)
+	}
+	if g := groups(map[string]any{"sub": "b", "email": "bob@example.com", "email_verified": true}); len(g) != 0 {
+		t.Fatalf("unlisted email: %v", g)
+	}
+}

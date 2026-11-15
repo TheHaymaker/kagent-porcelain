@@ -24,7 +24,10 @@ import (
 type Config struct {
 	// PublicURL is the web app's address, for links in email and push.
 	PublicURL string `json:"publicUrl"`
-	Identity  struct {
+	// PublicExposure declares the web app reachable from the internet. Test
+	// issuers (keys read from a file) are then refused (ADR 0005).
+	PublicExposure bool `json:"publicExposure,omitempty"`
+	Identity       struct {
 		Issuers []identity.Issuer `json:"issuers"`
 		// InternalKeyFile holds at least 32 random bytes for delegation tokens.
 		InternalKeyFile string `json:"internalKeyFile"`
@@ -101,6 +104,13 @@ func (c *Config) Validate() error {
 	add := func(f string, a ...any) { errs = append(errs, fmt.Sprintf(f, a...)) }
 	if len(c.Identity.Issuers) == 0 {
 		add("identity.issuers: at least one issuer is required")
+	}
+	if c.PublicExposure {
+		for _, is := range c.Identity.Issuers {
+			if is.JWKSFile != "" {
+				add("identity.issuers: %s reads its keys from a file, which only test issuers do; remove it or set publicExposure: false", is.URL)
+			}
+		}
 	}
 	if c.Identity.InternalKeyFile == "" {
 		add("identity.internalKeyFile is required")

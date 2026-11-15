@@ -62,6 +62,30 @@ type Issuer struct {
 	// Surface labels sessions from this issuer (web, teams, ios, android).
 	// A "surface" claim or X-Workbench-Surface header overrides it.
 	Surface string `json:"surface,omitempty" yaml:"surface,omitempty"`
+	// EmailGroups grants groups by email address, for issuers whose tokens
+	// carry none (Google Identity Platform). It applies only when the token's
+	// email_verified claim is true; groups from the token are kept.
+	EmailGroups map[string][]string `json:"emailGroups,omitempty" yaml:"emailGroups,omitempty"`
+}
+
+// groupsFor adds the issuer's email-mapped groups to the token's.
+func (is Issuer) groupsFor(claims map[string]any, email string, groups []string) []string {
+	if len(is.EmailGroups) == 0 || email == "" {
+		return groups
+	}
+	if verified, _ := claims["email_verified"].(bool); !verified {
+		return groups
+	}
+	for addr, extra := range is.EmailGroups {
+		if strings.EqualFold(addr, email) {
+			for _, g := range extra {
+				if !slices.Contains(groups, g) {
+					groups = append(groups, g)
+				}
+			}
+		}
+	}
+	return groups
 }
 
 // Claims Workbench adds to a principal.
@@ -241,7 +265,7 @@ func (a *Authenticator) verifyExternal(ctx context.Context, raw, surfaceHeader s
 
 	email := stringClaim(claims, firstNonEmpty(is.EmailClaim, "email"))
 	name := stringClaim(claims, firstNonEmpty(is.NameClaim, "name"))
-	groups := stringsClaim(claims, firstNonEmpty(is.GroupsClaim, "groups"))
+	groups := is.groupsFor(claims, email, stringsClaim(claims, firstNonEmpty(is.GroupsClaim, "groups")))
 	id := auth.PrincipalID(is.URL, subject)
 	if a.links != nil {
 		a.links.Seen(ctx, id, email, name, groups)
