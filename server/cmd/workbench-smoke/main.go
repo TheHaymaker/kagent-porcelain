@@ -3,6 +3,7 @@
 //
 //	workbench-smoke keys -dir DIR    make the test issuer's signing key and JWKS
 //	workbench-smoke run  [flags]     run the checks against a live server
+//	workbench-smoke chat [flags]     one real-model turn: the agent must reply
 //
 // The run signs tokens for two test users, alice (a requester) and bob (an
 // approver), with the key from `keys`. The server trusts them because its
@@ -61,6 +62,8 @@ func main() {
 		err = keys(os.Args[2:])
 	case "run":
 		err = run(os.Args[2:])
+	case "chat":
+		err = chat(os.Args[2:])
 	default:
 		usage()
 	}
@@ -71,7 +74,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: workbench-smoke keys -dir DIR | run [flags]")
+	fmt.Fprintln(os.Stderr, "usage: workbench-smoke keys -dir DIR | run [flags] | chat [flags]")
 	os.Exit(2)
 }
 
@@ -117,8 +120,91 @@ type config struct {
 }
 
 func run(args []string) error {
+	s, err := connect("run", args)
+	if err != nil {
+		return err
+	}
+	defer s.conn.Close()
+	return s.all(context.Background())
+}
+
+// chat sends alice's one-line request to a real-model agent and checks the
+// reply. It proves the model credentials, egress and streaming path; the
+// approval flow is covered by run against the scripted model.
+func chat(args []string) error {
+	s, err := connect("chat", args)
+	if err != nil {
+		return err
+	}
+	defer s.conn.Close()
+	ctx := context.Background()
+	a2c, err := s.a2a(ctx)
+	if err != nil {
+		return err
+	}
+	const word = "WORKBENCH-OK"
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("This is a connectivity check. Reply with exactly "+word+" and nothing else. Do not call any tools."))
+	res, err := a2c.SendMessage(withToken(ctx, s.alice.token), &a2a.SendMessageRequest{Message: msg, Config: &a2a.SendMessageConfig{ReturnImmediately: true}})
+	if err != nil {
+		return fmt.Errorf("start conversation: %w", err)
+	}
+	task, ok := res.(*a2a.Task)
+	if !ok {
+		return fmt.Errorf("expected a task from SendMessage, got %T", res)
+	}
+	var final *a2a.Task
+	if err := s.eventually(ctx, "the model to reply", func() (bool, error) {
+		t, err := a2c.GetTask(withToken(ctx, s.alice.token), &a2a.GetTaskRequest{ID: task.ID})
+		if err != nil {
+			return false, err
+		}
+		final = t
+		return hitl.Terminal(string(t.Status.State)), nil
+	}); err != nil {
+		return err
+	}
+	reply := taskText(final)
+	if final.Status.State != a2a.TaskStateCompleted {
+		return fmt.Errorf("task ended %s: %s", final.Status.State, reply)
+	}
+	if !strings.Contains(strings.ToUpper(reply), word) {
+		return fmt.Errorf("model replied %q, want %s", reply, word)
+	}
+	s.pass("the real model answered alice through kagent: %q", strings.TrimSpace(reply))
+	return nil
+}
+
+// taskText gathers the agent's text from a task's status, artifacts and
+// history.
+func taskText(t *a2a.Task) string {
+	var b strings.Builder
+	add := func(parts a2a.ContentParts) {
+		for _, p := range parts {
+			if txt := p.Text(); txt != "" {
+				b.WriteString(txt)
+				b.WriteString(" ")
+			}
+		}
+	}
+	if t.Status.Message != nil {
+		add(t.Status.Message.Parts)
+	}
+	for _, a := range t.Artifacts {
+		add(a.Parts)
+	}
+	if b.Len() == 0 {
+		for _, m := range t.History {
+			if m.Role == a2a.MessageRoleAgent {
+				add(m.Parts)
+			}
+		}
+	}
+	return b.String()
+}
+
+func connect(name string, args []string) (*smoke, error) {
 	var c config
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
 	fs.StringVar(&c.api, "api", "http://localhost:8083", "Workbench server address (a port-forward to the controller)")
 	fs.StringVar(&c.agent, "agent", "workbench-smoke/workbench-smoke", "smoke agent, namespace/name")
 	fs.StringVar(&c.keyFile, "key", "signing-key.json", "test issuer signing key from `keys`")
@@ -131,25 +217,24 @@ func run(args []string) error {
 
 	raw, err := os.ReadFile(c.keyFile)
 	if err != nil {
-		return fmt.Errorf("read signing key (run `keys` first): %w", err)
+		return nil, fmt.Errorf("read signing key (run `keys` first): %w", err)
 	}
 	key, err := jwk.ParseKey(raw)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	u, err := url.Parse(c.api)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	conn, err := grpc.NewClient(u.Host, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer conn.Close()
 	s := &smoke{c: c, key: key, conn: conn}
 	s.alice = s.user("smoke-alice", "Alice Smoke", []string{c.requesterGroup})
 	s.bob = s.user("smoke-bob", "Bob Smoke", []string{c.requesterGroup, c.approverGroup})
-	return s.all(context.Background())
+	return s, nil
 }
 
 type user struct {
