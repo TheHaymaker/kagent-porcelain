@@ -9,7 +9,7 @@
 #   up.sh workbench  secrets, configuration, database grants, then kagent's
 #                    chart again with the Workbench overlay
 #   up.sh smoke      the end-to-end smoke test (server/cmd/workbench-smoke)
-#   up.sh model      Gemini on Vertex AI as a real model, and a one-turn
+#   up.sh model      Gemini (API key) as a real model, and a one-turn
 #                    real-model check (workbench-smoke chat)
 #   up.sh all        every phase in order
 #   up.sh status     what is running
@@ -20,7 +20,7 @@
 #   NAMESPACE=kagent        TAG=<git short sha>
 #   MODEL_PROVIDER / its API key, for kagent's default model (optional; the
 #   smoke test brings its own scripted model)
-#   GEMINI_LOCATION=global  GEMINI_MODEL=<first of GEMINI_CANDIDATES that answers>
+#   GEMINI_MODEL=<first of GEMINI_CANDIDATES that answers>
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -348,69 +348,78 @@ smoke_api() {
   return $rc
 }
 
-GEMINI_LOCATION=${GEMINI_LOCATION:-global}
 GEMINI_CANDIDATES=${GEMINI_CANDIDATES:-"gemini-3-flash gemini-3-flash-preview gemini-2.5-flash"}
-VERTEX_SA="workbench-vertex@${PROJECT_ID}.iam.gserviceaccount.com"
+GEMINI_KEY_NAME=workbench-gemini
 
-# gemini_answers reports whether a model answers on Vertex AI for the
-# deploying account, which proves the API is on and the model exists here.
+# gemini_answers reports whether a model answers on the Gemini API with the
+# key in $1, which proves the key works and the model exists.
 gemini_answers() {
-  local host=aiplatform.googleapis.com code
-  [[ $GEMINI_LOCATION == global ]] || host="${GEMINI_LOCATION}-aiplatform.googleapis.com"
+  local key=$1 model=$2 code
   code=$(curl -s -o "$STATE/gemini-probe.json" -w '%{http_code}' -X POST \
-    -H "Authorization: Bearer $(gcloud auth print-access-token)" -H 'Content-Type: application/json' \
-    "https://$host/v1/projects/$PROJECT_ID/locations/$GEMINI_LOCATION/publishers/google/models/$1:generateContent" \
+    -H "x-goog-api-key: $key" -H 'Content-Type: application/json' \
+    "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent" \
     -d '{"contents":[{"role":"user","parts":[{"text":"Reply with OK."}]}]}')
   [[ $code == 200 ]] && return 0
-  echo "  $1: HTTP $code $(head -c 300 "$STATE/gemini-probe.json" | tr '\n' ' ')" >&2
+  echo "  $model: HTTP $code $(head -c 300 "$STATE/gemini-probe.json" | tr '\n' ' ')" >&2
   return 1
+}
+
+# remove_vertex_sa undoes an earlier attempt that gave agents a Vertex AI
+# service account key: kagent cannot mount key files into Substrate actors.
+remove_vertex_sa() {
+  local sa="workbench-vertex@${PROJECT_ID}.iam.gserviceaccount.com"
+  gc iam service-accounts describe "$sa" >/dev/null 2>&1 || return 0
+  say "Removing the unused workbench-vertex service account and its key"
+  gc projects remove-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:$sa" \
+    --role roles/aiplatform.user --condition None >/dev/null 2>&1 || true
+  gc iam service-accounts delete "$sa"
+  rm -f "$STATE/secrets/vertex-key.json"
+  kubectl -n "$NAMESPACE" delete secret workbench-vertex --ignore-not-found
 }
 
 phase_model() {
   kubeconfig
   mkdir -p "$STATE/secrets"
-  say "Vertex AI"
-  gc services enable aiplatform.googleapis.com iam.googleapis.com
-  if [[ -z ${GEMINI_MODEL:-} ]]; then
-    for m in $GEMINI_CANDIDATES; do
-      if gemini_answers "$m"; then GEMINI_MODEL=$m; break; fi
-    done
-    [[ -n ${GEMINI_MODEL:-} ]] || die "none of [$GEMINI_CANDIDATES] answered in $GEMINI_LOCATION (errors above); set GEMINI_MODEL"
-  else
-    gemini_answers "$GEMINI_MODEL" || die "$GEMINI_MODEL did not answer in $GEMINI_LOCATION (error above)"
-  fi
-  echo "  using $GEMINI_MODEL in $GEMINI_LOCATION"
+  remove_vertex_sa
 
-  say "Service account for agents' model calls (Vertex AI User only)"
-  gc iam service-accounts describe "$VERTEX_SA" >/dev/null 2>&1 ||
-    gc iam service-accounts create workbench-vertex --display-name "Workbench agents: Vertex AI only" ||
-    die "cannot create $VERTEX_SA: the deploying account needs Service Account Admin (roles/iam.serviceAccountAdmin)"
-  # A new service account takes a little while to be visible to IAM policy.
-  local try granted=
-  for try in 1 2 3 4 5 6; do
-    if gc projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:$VERTEX_SA" \
-      --role roles/aiplatform.user --condition None >/dev/null; then
-      granted=1; break
+  # Substrate injects the key into the agent's model requests at its egress
+  # proxy (x-goog-api-key to generativelanguage.googleapis.com), so the key
+  # never enters the actor. Vertex AI would need a mounted key file or the
+  # GKE metadata server, neither of which a Substrate actor has.
+  say "Gemini API key (restricted to the Gemini API)"
+  gc services enable apikeys.googleapis.com generativelanguage.googleapis.com
+  local keyfile="$STATE/secrets/gemini-api-key" name
+  if [[ ! -s $keyfile ]]; then
+    name=$(gc services api-keys list --filter "displayName=$GEMINI_KEY_NAME" --format 'value(name)' | head -1)
+    if [[ -z $name ]]; then
+      name=$(gc services api-keys create --display-name "$GEMINI_KEY_NAME" \
+        --api-target service=generativelanguage.googleapis.com --format 'value(response.name)') ||
+        die "cannot create an API key: the deploying account needs API Keys Admin (roles/serviceusage.apiKeysAdmin)"
     fi
-    sleep $((try * 5))
-  done
-  [[ -n $granted ]] ||
-    die "cannot grant Vertex AI User to $VERTEX_SA. Either grant it yourself:
-  gcloud projects add-iam-policy-binding $PROJECT_ID --member serviceAccount:$VERTEX_SA --role roles/aiplatform.user
-or give the deploying account Project IAM Admin (roles/resourcemanager.projectIamAdmin)."
-  local key="$STATE/secrets/vertex-key.json"
-  if [[ ! -s $key ]]; then
-    (umask 077; gc iam service-accounts keys create "$key" --iam-account "$VERTEX_SA") || {
-      rm -f "$key"
-      die "cannot create a key for $VERTEX_SA. The deploying account needs Service Account Key Admin
-  (roles/iam.serviceAccountKeyAdmin), and the organization policy iam.disableServiceAccountKeyCreation must allow it."
-    }
+    (umask 077; gc services api-keys get-key-string "$name" --format 'value(keyString)' > "$keyfile")
   fi
-  kubectl -n "$NAMESPACE" create secret generic workbench-vertex --from-file=key.json="$key" \
+  local key
+  key=$(<"$keyfile")
+
+  if [[ -z ${GEMINI_MODEL:-} ]]; then
+    local m try
+    # A new key can take a minute to work.
+    for try in 1 2 3 4; do
+      for m in $GEMINI_CANDIDATES; do
+        if gemini_answers "$key" "$m"; then GEMINI_MODEL=$m; break 2; fi
+      done
+      sleep 20
+    done
+    [[ -n ${GEMINI_MODEL:-} ]] || die "none of [$GEMINI_CANDIDATES] answered on the Gemini API (errors above); set GEMINI_MODEL"
+  else
+    gemini_answers "$key" "$GEMINI_MODEL" || die "$GEMINI_MODEL did not answer on the Gemini API (error above)"
+  fi
+  echo "  using $GEMINI_MODEL"
+  kubectl -n "$NAMESPACE" create secret generic workbench-gemini --from-file=GOOGLE_API_KEY="$keyfile" \
     --dry-run=client -o yaml | kubectl apply -f -
 
   say "Model and check agent"
-  NAMESPACE=$NAMESPACE PROJECT_ID=$PROJECT_ID GEMINI_LOCATION=$GEMINI_LOCATION GEMINI_MODEL=$GEMINI_MODEL \
+  NAMESPACE=$NAMESPACE GEMINI_MODEL=$GEMINI_MODEL \
     python3 -c 'import os,string,sys; print(string.Template(sys.stdin.read()).substitute(os.environ))' \
     < "$ROOT/deploy/model/gemini.yaml.tmpl" | kubectl apply -f -
   if ! kubectl -n "$NAMESPACE" wait agent/workbench-gemini-check --for=condition=Ready --timeout 5m; then
@@ -420,8 +429,6 @@ or give the deploying account Project IAM Admin (roles/resourcemanager.projectIa
       echo "--- $kind" >&2
       kubectl -n "$NAMESPACE" get "$kind" -o jsonpath='{.status}' >&2 || true; echo >&2
     done
-    kubectl -n "$NAMESPACE" logs deploy/kagent-controller --all-containers --since=10m 2>&1 |
-      grep -iE 'gemini|vertex|level=(warn|error)|"level":"(warn|error)"' | tail -40 >&2 || true
     return 1
   fi
 
@@ -429,8 +436,7 @@ or give the deploying account Project IAM Admin (roles/resourcemanager.projectIa
   if ! smoke_api chat -agent "$NAMESPACE/workbench-gemini-check"; then
     say "Real-model check failed; recent controller warnings and errors"
     kubectl -n "$NAMESPACE" logs deploy/kagent-controller --all-containers --since=15m 2>&1 |
-      grep -iE 'level=(warn|error)|"level":"(warn|error)"|panic|vertex|gemini|credential' | tail -60 >&2 || true
-    kubectl -n "$NAMESPACE" get modelconfig workbench-gemini -o yaml | sed -n '/^status:/,$p' >&2 || true
+      grep -iE 'level=(warn|error)|"level":"(warn|error)"|panic|gemini|credential' | grep -v remotemcpserver | tail -60 >&2 || true
     return 1
   fi
 }
