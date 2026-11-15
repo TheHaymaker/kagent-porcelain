@@ -18,6 +18,8 @@
 #   up.sh gitlab-find  list GitLab connections Google Cloud holds (read-only)
 #   up.sh gitlab-check what GITLAB_TOKEN acts as and can reach (read-only)
 #   up.sh gitlab-setup GitLab group, apps/templates subgroups, scaffolds
+#   up.sh tools      builds repo, buckets, service accounts and the builder's
+#                    tool servers (needs gitlab-setup)
 #   up.sh all        every phase in order
 #   up.sh status     what is running
 #   up.sh down       delete the cluster (the registry and images stay)
@@ -787,6 +789,88 @@ phase_gitlab_setup() {
   grep '^GITLAB_' <<<"$out" | sed 's/^/  /'
 }
 
+# phase_tools creates the Google Cloud resources the builder's tools use and
+# deploys the tool servers (gitlab, build, cloudrun, artifactregistry) with
+# their RemoteMCPServers in the agents' namespace. Needs gitlab-setup first.
+phase_tools() {
+  kubeconfig
+  [[ -s $STATE/secrets/gitlab.env ]] || die "run up.sh gitlab-setup first"
+  [[ -n ${GITLAB_TOKEN:-} ]] || die "GITLAB_TOKEN is not set"
+  [[ -n ${GITHUB_ACTIONS:-} ]] && echo "::add-mask::$GITLAB_TOKEN"
+  # shellcheck disable=SC1091
+  source "$STATE/secrets/gitlab.env"
+  local number pool build_sa preview_sa bucket
+  number=$(gc projects describe "$PROJECT_ID" --format 'value(projectNumber)')
+  pool="principal://iam.googleapis.com/projects/$number/locations/global/workloadIdentityPools/$PROJECT_ID.svc.id.goog/subject/ns/workbench-tools/sa"
+  build_sa="workbench-builds@$PROJECT_ID.iam.gserviceaccount.com"
+  preview_sa="workbench-preview@$PROJECT_ID.iam.gserviceaccount.com"
+  bucket="$PROJECT_ID-workbench-build-sources"
+
+  say "Google Cloud resources for builds and previews"
+  gc services enable cloudbuild.googleapis.com run.googleapis.com artifactregistry.googleapis.com logging.googleapis.com >/dev/null
+  gc artifacts repositories describe builds --location "$REGION" >/dev/null 2>&1 ||
+    gc artifacts repositories create builds --location "$REGION" --repository-format docker \
+      --description "Workbench app images built by build-mcp" >/dev/null
+  gcloud storage buckets describe "gs://$bucket" >/dev/null 2>&1 ||
+    gcloud storage buckets create "gs://$bucket" --project "$PROJECT_ID" --location "$REGION" \
+      --uniform-bucket-level-access --public-access-prevention >/dev/null
+  gcloud storage buckets update "gs://$bucket" --lifecycle-file <(echo '{"rule":[{"action":{"type":"Delete"},"condition":{"age":7}}]}') >/dev/null
+  local sa
+  for sa in workbench-builds:"Workbench app image builds" workbench-preview:"Workbench preview apps (no roles)"; do
+    gc iam service-accounts describe "${sa%%:*}@$PROJECT_ID.iam.gserviceaccount.com" >/dev/null 2>&1 ||
+      gc iam service-accounts create "${sa%%:*}" --display-name "${sa#*:}" >/dev/null
+  done
+  echo "  builds repository, staging bucket (7-day lifecycle), build and preview service accounts"
+
+  say "Roles (Workload Identity for the tool servers)"
+  grant_project() { # member role
+    local try
+    for try in 1 2 3 4 5 6; do
+      gc projects add-iam-policy-binding "$PROJECT_ID" --member "$1" --role "$2" --condition None >/dev/null 2>&1 && return 0
+      sleep $((try * 5))
+    done
+    die "cannot grant $2 to $1"
+  }
+  grant_project "serviceAccount:$build_sa" roles/logging.logWriter
+  gc artifacts repositories add-iam-policy-binding builds --location "$REGION" \
+    --member "serviceAccount:$build_sa" --role roles/artifactregistry.writer >/dev/null
+  gcloud storage buckets add-iam-policy-binding "gs://$bucket" --member "serviceAccount:$build_sa" \
+    --role roles/storage.objectViewer >/dev/null
+  # build-mcp: start builds as workbench-builds, write sources.
+  grant_project "$pool/build-mcp" roles/cloudbuild.builds.editor
+  gcloud storage buckets add-iam-policy-binding "gs://$bucket" --member "$pool/build-mcp" \
+    --role roles/storage.objectCreator >/dev/null
+  gc iam service-accounts add-iam-policy-binding "$build_sa" --member "$pool/build-mcp" \
+    --role roles/iam.serviceAccountUser >/dev/null
+  # cloudrun-mcp: manage preview services running as workbench-preview, read their logs.
+  grant_project "$pool/cloudrun-mcp" roles/run.admin
+  grant_project "$pool/cloudrun-mcp" roles/logging.viewer
+  gc iam service-accounts add-iam-policy-binding "$preview_sa" --member "$pool/cloudrun-mcp" \
+    --role roles/iam.serviceAccountUser >/dev/null
+  # artifactregistry-mcp: read the builds repository.
+  gc artifacts repositories add-iam-policy-binding builds --location "$REGION" \
+    --member "$pool/artifactregistry-mcp" --role roles/artifactregistry.reader >/dev/null
+  echo "  granted"
+
+  say "Tool servers"
+  kubectl create namespace workbench-tools --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl -n workbench-tools create secret generic gitlab-mcp-token --from-literal=token="$GITLAB_TOKEN" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  NAMESPACE=$NAMESPACE REGISTRY=$REGISTRY TAG=$TAG PROJECT_ID=$PROJECT_ID REGION=$REGION \
+    GITLAB_BASE_URL=$GITLAB_BASE_URL GITLAB_ALLOWED_GROUP=$GITLAB_ALLOWED_GROUP GITLAB_TEMPLATE_GROUP=$GITLAB_TEMPLATE_GROUP \
+    BUILD_BUCKET=$bucket BUILD_SA=$build_sa PREVIEW_SA=$preview_sa \
+    python3 -c 'import os,string,sys; print(string.Template(sys.stdin.read()).substitute(os.environ))' \
+    < "$ROOT/deploy/tools/tools.yaml.tmpl" | kubectl apply -f -
+  local d ok=1
+  for d in gitlab-mcp build-mcp cloudrun-mcp artifactregistry-mcp; do
+    if ! kubectl -n workbench-tools rollout status "deploy/$d" --timeout 3m; then
+      ok=
+      kubectl -n workbench-tools logs "deploy/$d" --tail=30 >&2 || true
+    fi
+  done
+  [[ -n $ok ]] || die "a tool server did not start (logs above)"
+}
+
 phase_status() {
   kubeconfig
   kubectl -n "$NAMESPACE" get pods,svc
@@ -809,10 +893,11 @@ case ${1:-} in
   gitlab-find) phase_check; phase_gitlab_find ;;
   gitlab-check) phase_gitlab_check ;;
   gitlab-setup) phase_gitlab_setup ;;
+  tools) phase_check; phase_tools ;;
   expose) phase_check; phase_expose ;;
   unexpose) phase_check; phase_unexpose ;;
   all) phase_check; phase_infra; phase_images; phase_kagent; phase_workbench; phase_smoke ;;
   status) phase_status ;;
   down) phase_down ;;
-  *) sed -n '2,32p' "$0"; exit 2 ;;
+  *) sed -n '2,34p' "$0"; exit 2 ;;
 esac
