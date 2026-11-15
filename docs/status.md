@@ -20,8 +20,24 @@ place of kagent's controller, and runs `workbench-smoke` against it. On
 7. The audit trail records the request, Bob's decision for Alice, and delivery.
 8. kagent's signed push notification arrives and Alice is told the task finished.
 
-The model is a scripted mock (`workbench-mockllm`) and the deployer is the
-log deployer; no real LLM, GitLab or Cloud Run has been exercised yet.
+That run uses a scripted model (`workbench-mockllm`) and the log deployer.
+
+A real model works too: `up.sh model` (15 Nov 2026) gives agents Gemini
+(`gemini-3-flash-preview`) on Vertex AI, and `workbench-smoke chat` got
+the expected reply from it through kagent and Substrate. How it is wired,
+and why:
+
+- Substrate actors cannot reach the GKE metadata server, and kagent rejects
+  a ModelConfig that needs a mounted key file under Substrate, so kagent's
+  `GeminiVertexAI` provider has no usable credential there.
+- Instead the `Gemini` provider points at Vertex AI's endpoint with an API
+  key bound to the `workbench-vertex` service account (Vertex AI User
+  only). Substrate's egress proxy adds the key as `x-goog-api-key`, so it
+  never enters the actor, and usage bills through Cloud Billing.
+- The plain Gemini API (AI Studio) is not used: it bills from prepaid
+  credits, which this project has used up.
+
+GitLab and Cloud Run have not been exercised yet.
 
 ## Requirements
 
@@ -53,9 +69,10 @@ log deployer; no real LLM, GitLab or Cloud Run has been exercised yet.
 
 ## Not yet done, in order of importance
 
-1. **A real app end to end.** The cluster, kagent and the approval loop are
-   proven (above); next is a real model, GitLab and a scaffold taken from
-   request to a Cloud Run preview with the Cloud Run deployer.
+1. **A real app end to end.** The cluster, kagent, the approval loop and a
+   real model are proven (above); next is GitLab and a scaffold taken from
+   request to a Cloud Run preview with the Cloud Run deployer, using the
+   builder agent pack on `workbench-gemini`.
 2. **The A2UI DataPart spike.** Does kagent pass an agent's DataParts through
    intact? The tool-result carrier works either way.
 3. **Approval proof for preview-level always-ask tools** (ADR 0002 known gap).
