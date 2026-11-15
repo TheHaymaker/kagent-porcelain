@@ -5,6 +5,7 @@ import { registerAuthTokenSource } from "@/api/transport";
 import { api } from "@/api/clients";
 import type { GetMeResponse } from "@/gen/workbench/v1/identity_pb";
 import { bearerOf, userManager } from "./oidc";
+import { signInWithIdentityPlatform, signOutOfIdentityPlatform, watchIdentityPlatform } from "./identityPlatform";
 
 export type AuthStatus = "loading" | "signed-out" | "signed-in";
 
@@ -29,6 +30,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       registerAuthTokenSource(() => "mock-token");
       setStatus("signed-in");
       return;
+    }
+    if (cfg.authProvider === "identity-platform") {
+      let token: string | undefined;
+      registerAuthTokenSource(() => token);
+      return watchIdentityPlatform(cfg, (t) => {
+        const changedUser = (token === undefined) !== (t === undefined);
+        token = t;
+        setStatus(t ? "signed-in" : "signed-out");
+        if (changedUser) setUser(null);
+      });
     }
     const um = userManager(cfg);
     let current: User | null = null;
@@ -72,12 +83,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(
     async (returnTo?: string) => {
       if (cfg.mock) return;
+      if (cfg.authProvider === "identity-platform") return signInWithIdentityPlatform(cfg);
       await userManager(cfg).signinRedirect({ state: { returnTo: returnTo ?? window.location.pathname + window.location.search } });
     },
     [cfg],
   );
   const signOut = useCallback(async () => {
     if (cfg.mock) return;
+    if (cfg.authProvider === "identity-platform") return signOutOfIdentityPlatform(cfg);
     await userManager(cfg).signoutRedirect();
   }, [cfg]);
   const completeSignIn = useCallback(async () => {

@@ -2,7 +2,18 @@
  * Runtime configuration, loaded from `/config.json` before the app mounts so one
  * build serves every environment.
  */
+export interface IdentityPlatformConfig {
+  /** The browser API key: public by design, restricted to Identity Toolkit and the app's host. */
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  tenantId?: string;
+}
+
 export interface WorkbenchConfig {
+  /** How people sign in: generic OIDC (code + PKCE) or Google Identity Platform (ADR 0005). */
+  authProvider: "oidc" | "identity-platform";
+  identityPlatform?: IdentityPlatformConfig;
   oidcIssuer: string;
   oidcClientId: string;
   /** Root of the gRPC-Web services; same origin, normally `/api`. */
@@ -27,6 +38,8 @@ export async function loadConfig(url = "/config.json"): Promise<WorkbenchConfig>
 
 export function normaliseConfig(raw: Partial<WorkbenchConfig>): WorkbenchConfig {
   return {
+    authProvider: raw.authProvider === "identity-platform" ? "identity-platform" : "oidc",
+    identityPlatform: raw.identityPlatform,
     oidcIssuer: raw.oidcIssuer ?? "",
     oidcClientId: raw.oidcClientId ?? "",
     apiBaseUrl: (raw.apiBaseUrl ?? "/api").replace(/\/$/, ""),
