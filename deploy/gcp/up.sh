@@ -17,6 +17,7 @@
 #   up.sh unexpose   back to private (port-forward) with the smoke test's issuer
 #   up.sh gitlab-find  list GitLab connections Google Cloud holds (read-only)
 #   up.sh gitlab-check what GITLAB_TOKEN acts as and can reach (read-only)
+#   up.sh gitlab-setup GitLab group, apps/templates subgroups, scaffolds
 #   up.sh all        every phase in order
 #   up.sh status     what is running
 #   up.sh down       delete the cluster (the registry and images stay)
@@ -770,6 +771,22 @@ PY
   rm -f "$STATE/gitlab.json"
 }
 
+# phase_gitlab_setup creates <GITLAB_GROUP>, its apps and templates
+# subgroups, and publishes the scaffolds as template projects. The group
+# paths (not secret) are kept in the state directory for later phases.
+GITLAB_GROUP=${GITLAB_GROUP:-thehaymaker-workbench}
+phase_gitlab_setup() {
+  [[ -n ${GITLAB_TOKEN:-} ]] || die "GITLAB_TOKEN is not set (the deploy environment's GITLAB_TOKEN secret)"
+  [[ -n ${GITHUB_ACTIONS:-} ]] && echo "::add-mask::$GITLAB_TOKEN"
+  mkdir -p "$STATE/secrets"
+  say "GitLab groups and scaffold templates"
+  local out
+  out=$(GITLAB_BASE_URL=$GITLAB_BASE_URL python3 "$ROOT/deploy/gitlab/setup.py" --group "$GITLAB_GROUP" ${GITLAB_REPUBLISH:+--republish})
+  grep -v '^GITLAB_' <<<"$out"
+  { echo "GITLAB_BASE_URL=$GITLAB_BASE_URL"; grep '^GITLAB_' <<<"$out"; } > "$STATE/secrets/gitlab.env"
+  grep '^GITLAB_' <<<"$out" | sed 's/^/  /'
+}
+
 phase_status() {
   kubeconfig
   kubectl -n "$NAMESPACE" get pods,svc
@@ -791,10 +808,11 @@ case ${1:-} in
   model) phase_check; phase_model ;;
   gitlab-find) phase_check; phase_gitlab_find ;;
   gitlab-check) phase_gitlab_check ;;
+  gitlab-setup) phase_gitlab_setup ;;
   expose) phase_check; phase_expose ;;
   unexpose) phase_check; phase_unexpose ;;
   all) phase_check; phase_infra; phase_images; phase_kagent; phase_workbench; phase_smoke ;;
   status) phase_status ;;
   down) phase_down ;;
-  *) sed -n '2,31p' "$0"; exit 2 ;;
+  *) sed -n '2,32p' "$0"; exit 2 ;;
 esac
