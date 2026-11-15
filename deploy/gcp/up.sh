@@ -370,10 +370,19 @@ gemini_answers() {
 # revoke_keys deletes every API key with the given display name. Key
 # operations never print their result: gcloud's includes the key string.
 revoke_keys() {
-  local name
-  for name in $(gc services api-keys list --filter "displayName=$1" --format 'value(name)' 2>/dev/null); do
-    gc services api-keys delete "$name" >/dev/null 2>&1 && echo "  revoked API key $name ($1)"
+  local name names
+  names=$(gc services api-keys list --filter "displayName=$1" --format 'value(name)' 2>"$STATE/apikey.err") || {
+    grep -vi keystring "$STATE/apikey.err" >&2; die "cannot list API keys named $1"
+  }
+  for name in $names; do
+    if gc services api-keys delete "$name" --format none 2>"$STATE/apikey.err"; then
+      echo "  revoked API key $name ($1)"
+    else
+      grep -vi keystring "$STATE/apikey.err" >&2
+      die "cannot revoke API key $name ($1)"
+    fi
   done
+  rm -f "$STATE/apikey.err"
 }
 
 phase_model() {
