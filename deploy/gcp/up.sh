@@ -369,6 +369,19 @@ gemini_answers() {
 
 # revoke_keys deletes every API key with the given display name. Key
 # operations never print their result: gcloud's includes the key string.
+api_key_force_delete() {
+  local code
+  code=$(curl -s -o "$STATE/apikey-delete.json" -w '%{http_code}' -X DELETE \
+    -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    "https://apikeys.googleapis.com/v2/$1?checkExistingUsage=SKIP")
+  if [[ $code != 200 ]]; then
+    echo "  force delete: HTTP $code $(grep -vi keystring "$STATE/apikey-delete.json" | head -c 400 | tr '\n' ' ')" >&2
+    rm -f "$STATE/apikey-delete.json"
+    return 1
+  fi
+  rm -f "$STATE/apikey-delete.json"
+}
+
 revoke_keys() {
   local name names
   names=$(gc services api-keys list --filter "displayName=$1" --format 'value(name)' 2>"$STATE/apikey.err") || {
@@ -377,6 +390,10 @@ revoke_keys() {
   for name in $names; do
     if gc services api-keys delete "$name" --format none 2>"$STATE/apikey.err"; then
       echo "  revoked API key $name ($1)"
+    elif grep -q APIKEYS_DELETE_INCOMPATIBLE_WITH_USAGE "$STATE/apikey.err" && api_key_force_delete "$name"; then
+      # Google refuses to delete a key used in the last week unless told to
+      # skip that check; a key being revoked is exactly that case.
+      echo "  revoked API key $name ($1), overriding the recent-usage check"
     else
       grep -vi keystring "$STATE/apikey.err" >&2
       die "cannot revoke API key $name ($1)"
