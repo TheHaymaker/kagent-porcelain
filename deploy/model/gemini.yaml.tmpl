@@ -1,0 +1,43 @@
+# A real model for Workbench's agents: Gemini on Vertex AI, and a minimal
+# agent that uses it for the real-model check (workbench-smoke chat).
+# Rendered by deploy/gcp/up.sh (Python string.Template): ${NAMESPACE}
+# ${PROJECT_ID} ${GEMINI_LOCATION} ${GEMINI_MODEL}.
+#
+# Agents run inside Substrate microVMs that cannot reach the GKE metadata
+# server, so Workload Identity is not available to them. kagent mounts the
+# Secret below as GOOGLE_APPLICATION_CREDENTIALS instead: a key for the
+# workbench-vertex service account, which holds only Vertex AI User. up.sh
+# creates the Secret; it is never committed.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata:
+  name: workbench-gemini
+  namespace: ${NAMESPACE}
+spec:
+  provider: GeminiVertexAI
+  model: ${GEMINI_MODEL}
+  apiKeySecret: workbench-vertex
+  apiKeySecretKey: key.json
+  geminiVertexAI:
+    projectID: ${PROJECT_ID}
+    location: ${GEMINI_LOCATION}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: workbench-gemini-check
+  namespace: ${NAMESPACE}
+spec:
+  description: Real-model connectivity check for Workbench
+  modelConfig: {name: workbench-gemini}
+  systemPrompt: You are a terse assistant. Follow the user's formatting instructions exactly.
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata:
+  name: workbench-gemini-check
+  namespace: ${NAMESPACE}
+spec:
+  template:
+    ref: {name: workbench-gemini-check}
+  harnessRef: {name: kagent-default}
