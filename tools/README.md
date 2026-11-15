@@ -219,6 +219,29 @@ references to other repositories, are rejected.
 | `-location` | `AR_LOCATION` | – |
 | `-repository` | `AR_REPOSITORY` | `builds` |
 
+## build-mcp
+
+Builds a Workbench app's container image from its GitLab project with Cloud
+Build, in place of a GitLab CI pipeline that would need Google credentials.
+The source is fetched through the same GitLab client as gitlab-mcp, so only
+projects in the allowed group can be built; the tree at one commit is uploaded
+to a staging bucket and built as a plain `docker build` of the repository
+root, as a dedicated service account, into the builds repository only.
+
+| Tool | Does | readOnly | destructive | idempotent | openWorld | Always-ask |
+| --- | --- | --- | --- | --- | --- | --- |
+| `build_start_image` | resolve ref → commit, upload the tree, start the build; returns `build_id` and the `<repo>/<project>:<commit12>` tag | no | no | no | no | no |
+| `build_get_status` | status of a Workbench build (tagged `workbench`; others are refused); on SUCCESS the digest-pinned `image_ref` for `cloudrun_deploy_preview` | yes | no | yes | no | no |
+
+| Flag | Env | Default |
+| --- | --- | --- |
+| `-gitlab-url`, `-allowed-group`, `-template-group`, `-token-file` | as gitlab-mcp | |
+| `-project` | `BUILD_PROJECT` | – |
+| `-location` | `BUILD_LOCATION` | – |
+| `-repository` | `BUILD_REPOSITORY` | `builds` |
+| `-bucket` | `BUILD_BUCKET` | – |
+| `-service-account` | `BUILD_SERVICE_ACCOUNT` | – |
+
 ## bigquery-mcp
 
 All jobs run, and are billed, in one configured project and location.
