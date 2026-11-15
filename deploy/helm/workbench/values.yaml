@@ -27,3 +27,11 @@ web:
     className: gce
     annotations: {}
     tlsSecretName: workbench-tls
+  # GKE-specific load balancer settings (ADR 0005). Omit on other clusters.
+  # gke:
+  #   staticIPName: workbench-web        # a reserved global address
+  #   managedCertificate: true           # Google-managed TLS for web.host
+  #   backendConfig:
+  #     timeoutSec: 3600                 # chat turns stream for minutes
+  #     securityPolicy: workbench-allowlist   # Cloud Armor
+  gke: {}

@@ -8,7 +8,7 @@ on:
       phase:
         description: up.sh phase
         type: choice
-        options: [check, infra, images, kagent, workbench, smoke, model, all, status, down]
+        options: [check, infra, images, kagent, workbench, smoke, model, expose, unexpose, all, status, down]
         default: check
       project_id:
         description: GCP project
@@ -93,6 +93,10 @@ jobs:
       - name: up.sh ${{ inputs.phase }}
         env:
           INPUT_TAG: ${{ inputs.tag }}
+          # For expose: who may sign in, and from where. Secrets, not inputs,
+          # so emails and IP addresses never appear in this public repo's logs.
+          WORKBENCH_ADMINS: ${{ secrets.WORKBENCH_ADMINS }}
+          WORKBENCH_ALLOWED_RANGES: ${{ secrets.WORKBENCH_ALLOWED_RANGES }}
         run: |
           if [ -n "$INPUT_TAG" ]; then export TAG="$INPUT_TAG"; fi
           deploy/gcp/up.sh ${{ inputs.phase }}

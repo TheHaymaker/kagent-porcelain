@@ -11,6 +11,10 @@
 #   up.sh smoke      the end-to-end smoke test (server/cmd/workbench-smoke)
 #   up.sh model      Gemini on Vertex AI as a real model, and a one-turn
 #                    real-model check (workbench-smoke chat)
+#   up.sh expose     public HTTPS address behind Google sign-in and a Cloud
+#                    Armor allowlist (ADR 0005); needs WORKBENCH_ADMINS and
+#                    WORKBENCH_ALLOWED_RANGES
+#   up.sh unexpose   back to private (port-forward) with the smoke test's issuer
 #   up.sh all        every phase in order
 #   up.sh status     what is running
 #   up.sh down       delete the cluster (the registry and images stay)
@@ -246,29 +250,14 @@ phase_workbench() {
     --from-file=private-key.pem="$secrets/push-private-key.pem" | kubectl apply -f -
 
   say "Workbench configuration"
+  load_exposure
   cat > "$STATE/workbench-values.yaml" <<V
 kagent: {release: kagent, fullname: kagent}
 web:
   image: $REGISTRY/workbench-web:$TAG
-  host: localhost
-  ingress: {enabled: false}
-  runtimeConfig:
-    apiBaseUrl: /api
-    defaultAgent: $NAMESPACE/workbench-smoke
-    oidcIssuer: ${OIDC_ISSUER:-https://accounts.google.com}
-    oidcClientId: ${OIDC_CLIENT_ID:-unset}
+$(web_values)
 config:
-  publicUrl: http://localhost:8080
-  identity:
-    issuers:
-      # Test users for the smoke test; tokens are signed with the key in
-      # deploy/gcp/.state/secrets/smoke. Remove for anything but a test cluster.
-      - kind: company
-        url: $SMOKE_ISSUER
-        audiences: [workbench]
-        jwksFile: /var/run/secrets/workbench/smoke-jwks.json
-        surface: web
-$( [[ -n ${OIDC_CLIENT_ID:-} ]] && printf '      - kind: company\n        url: %s\n        audiences: [%s]\n        surface: web\n' "${OIDC_ISSUER:-https://accounts.google.com}" "$OIDC_CLIENT_ID" )
+$(identity_values)
     internalKeyFile: /var/run/secrets/workbench/internal-key
   authorization:
     platformGroups: [workbench-platform]
@@ -312,6 +301,8 @@ V
 
 phase_smoke() {
   kubeconfig
+  load_exposure
+  [[ -z $EXPOSED ]] || die "the cluster is public, so the smoke test's issuer is off (ADR 0005); run up.sh unexpose first"
   say "Smoke test agent"
   local cp
   cp=$(kubectl -n "$NAMESPACE" get configmap kagent-controller -o jsonpath='{.data.controller\.yaml}' |
@@ -482,6 +473,11 @@ phase_model() {
     return 1
   fi
 
+  load_exposure
+  if [[ -n $EXPOSED ]]; then
+    echo "The cluster is public, so the test issuer is off; try the model at https://$EXPOSE_HOST instead."
+    return 0
+  fi
   say "Real-model check"
   if ! smoke_api chat -agent "$NAMESPACE/workbench-gemini-check"; then
     say "Real-model check failed; recent controller warnings and errors"
@@ -489,6 +485,197 @@ phase_model() {
       grep -iE 'level=(warn|error)|"level":"(warn|error)"|panic|gemini|credential' | grep -v remotemcpserver | tail -60 >&2 || true
     return 1
   fi
+}
+
+# --- Public exposure (ADR 0005) -------------------------------------------
+# Settings persist in the private state directory so every later phase
+# renders the same public configuration. up.sh unexpose removes them.
+EXPOSE_ENV="$STATE/secrets/expose.env"
+EXPOSED=
+load_exposure() {
+  EXPOSED=
+  if [[ -s $EXPOSE_ENV ]]; then
+    # shellcheck disable=SC1090
+    source "$EXPOSE_ENV"
+    EXPOSED=1
+  fi
+}
+
+web_values() {
+  if [[ -z $EXPOSED ]]; then
+    cat <<W
+  host: localhost
+  ingress: {enabled: false}
+  runtimeConfig:
+    apiBaseUrl: /api
+    defaultAgent: $NAMESPACE/workbench-smoke
+    oidcIssuer: ${OIDC_ISSUER:-https://accounts.google.com}
+    oidcClientId: ${OIDC_CLIENT_ID:-unset}
+W
+    return
+  fi
+  cat <<W
+  host: $EXPOSE_HOST
+  ingress: {enabled: true}
+  gke:
+    staticIPName: workbench-web
+    managedCertificate: true
+    backendConfig: {securityPolicy: workbench-allowlist}
+  runtimeConfig:
+    apiBaseUrl: /api
+    defaultAgent: $NAMESPACE/workbench-gemini-check
+    authProvider: identity-platform
+    identityPlatform:
+      apiKey: $(<"$STATE/secrets/browser-api-key")
+      authDomain: ${PROJECT_ID}.firebaseapp.com
+      projectId: $PROJECT_ID
+W
+}
+
+identity_values() {
+  if [[ -z $EXPOSED ]]; then
+    cat <<W
+  publicUrl: http://localhost:8080
+  identity:
+    issuers:
+      # Test users for the smoke test; tokens are signed with the key in
+      # deploy/gcp/.state/secrets/smoke. Never on a public cluster.
+      - kind: company
+        url: $SMOKE_ISSUER
+        audiences: [workbench]
+        jwksFile: /var/run/secrets/workbench/smoke-jwks.json
+        surface: web
+$( [[ -n ${OIDC_CLIENT_ID:-} ]] && printf '      - kind: company\n        url: %s\n        audiences: [%s]\n        surface: web\n' "${OIDC_ISSUER:-https://accounts.google.com}" "$OIDC_CLIENT_ID" )
+W
+    return
+  fi
+  local email
+  cat <<W
+  publicUrl: https://$EXPOSE_HOST
+  publicExposure: true
+  identity:
+    issuers:
+      # Google Identity Platform. Its tokens carry no groups, so the admins
+      # listed at expose time get every Workbench role by verified email.
+      - kind: company
+        url: https://securetoken.google.com/$PROJECT_ID
+        audiences: [$PROJECT_ID]
+        jwksUrl: https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com
+        surface: web
+        emailGroups:
+W
+  for email in ${WORKBENCH_ADMINS//,/ }; do
+    printf '          "%s": [workbench-requesters, workbench-approvers, workbench-platform, workbench-audit]\n' "$email"
+  done
+}
+
+# idp calls the Identity Platform admin API as the deploying account.
+idp() {
+  local method=$1 path=$2 body=${3:-}
+  curl -s -o "$STATE/idp.json" -w '%{http_code}' -X "$method" \
+    -H "Authorization: Bearer $(gcloud auth print-access-token)" -H "X-Goog-User-Project: $PROJECT_ID" \
+    -H 'Content-Type: application/json' ${body:+-d "$body"} \
+    "https://identitytoolkit.googleapis.com/$path"
+}
+
+phase_expose() {
+  kubeconfig
+  [[ -n ${WORKBENCH_ADMINS:-} ]] || die "set WORKBENCH_ADMINS to the comma-separated Google accounts that may sign in"
+  [[ -n ${WORKBENCH_ALLOWED_RANGES:-} ]] || die "set WORKBENCH_ALLOWED_RANGES to the comma-separated source CIDRs allowed through Cloud Armor
+  (your public IP as a.b.c.d/32; 0.0.0.0/0 deliberately opens it to everyone)"
+  mkdir -p "$STATE/secrets"
+  gc services enable compute.googleapis.com identitytoolkit.googleapis.com apikeys.googleapis.com >/dev/null
+
+  say "Static IP and hostname"
+  gc compute addresses describe workbench-web --global >/dev/null 2>&1 ||
+    gc compute addresses create workbench-web --global >/dev/null
+  local ip host
+  ip=$(gc compute addresses describe workbench-web --global --format 'value(address)')
+  host="${ip//./-}.sslip.io"
+  echo "  $ip -> https://$host"
+
+  say "Cloud Armor allowlist"
+  gc compute security-policies describe workbench-allowlist >/dev/null 2>&1 ||
+    gc compute security-policies create workbench-allowlist --description "Workbench: allowed source ranges (ADR 0005)" >/dev/null
+  gc compute security-policies rules update 2147483647 --security-policy workbench-allowlist --action deny-403 >/dev/null
+  if gc compute security-policies rules describe 1000 --security-policy workbench-allowlist >/dev/null 2>&1; then
+    gc compute security-policies rules update 1000 --security-policy workbench-allowlist \
+      --src-ip-ranges "$WORKBENCH_ALLOWED_RANGES" --action allow >/dev/null
+  else
+    gc compute security-policies rules create 1000 --security-policy workbench-allowlist \
+      --src-ip-ranges "$WORKBENCH_ALLOWED_RANGES" --action allow >/dev/null
+  fi
+  echo "  allowing $(tr ',' '\n' <<<"$WORKBENCH_ALLOWED_RANGES" | wc -l | tr -d ' ') source range(s); everything else gets 403"
+
+  say "Identity Platform"
+  local code
+  code=$(idp POST "v2/projects/$PROJECT_ID/identityPlatform:initializeAuth" '{}')
+  [[ $code == 200 ]] || grep -qi "already" "$STATE/idp.json" ||
+    echo "  initializeAuth: HTTP $code $(head -c 300 "$STATE/idp.json" | tr '\n' ' ')" >&2
+  code=$(idp GET "admin/v2/projects/$PROJECT_ID/config")
+  [[ $code == 200 ]] || die "cannot read Identity Platform config: HTTP $code $(head -c 300 "$STATE/idp.json")"
+  local domains
+  domains=$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); d=c.get("authorizedDomains",[]);
+for x in sys.argv[2:]:
+    d.append(x) if x not in d else None
+print(json.dumps({"authorizedDomains": d}))' "$STATE/idp.json" "$host" "${PROJECT_ID}.firebaseapp.com" localhost)
+  code=$(idp PATCH "admin/v2/projects/$PROJECT_ID/config?updateMask=authorizedDomains" "$domains")
+  [[ $code == 200 ]] || die "cannot set authorized domains: HTTP $code $(head -c 300 "$STATE/idp.json")"
+  echo "  authorized domains include $host"
+  local google_ready=
+  code=$(idp GET "admin/v2/projects/$PROJECT_ID/defaultSupportedIdpConfigs/google.com")
+  [[ $code == 200 ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("enabled") else 1)' "$STATE/idp.json" && google_ready=1
+  rm -f "$STATE/idp.json"
+
+  say "Browser API key (public by design: Identity Toolkit only, from $host only)"
+  local keyfile="$STATE/secrets/browser-api-key" name
+  if [[ ! -s $keyfile ]]; then
+    revoke_keys workbench-web-browser
+    name=$(gc services api-keys create --display-name workbench-web-browser \
+      --api-target service=identitytoolkit.googleapis.com --api-target service=securetoken.googleapis.com \
+      --allowed-referrers "https://$host/*" --format 'value(response.name)' 2>"$STATE/apikey.err") || {
+      grep -vi keystring "$STATE/apikey.err" >&2; rm -f "$STATE/apikey.err"; die "cannot create the browser API key"
+    }
+    rm -f "$STATE/apikey.err"
+    (umask 077; gc services api-keys get-key-string "$name" --format 'value(keyString)' > "$keyfile" 2>/dev/null)
+  fi
+
+  (umask 077; printf 'EXPOSE_HOST=%q\nWORKBENCH_ADMINS=%q\n' "$host" "$WORKBENCH_ADMINS" > "$EXPOSE_ENV")
+  phase_workbench
+
+  say "Load balancer"
+  local addr=
+  for _ in $(seq 1 60); do
+    addr=$(kubectl -n "$NAMESPACE" get ingress workbench-web -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+    [[ -n $addr ]] && break
+    sleep 10
+  done
+  [[ -n $addr ]] || die "the load balancer did not get an address in 10 minutes: kubectl -n $NAMESPACE describe ingress workbench-web"
+  echo "  load balancer up at $addr"
+  echo "  certificate: $(kubectl -n "$NAMESPACE" get managedcertificate workbench-web -o jsonpath='{.status.certificateStatus}' 2>/dev/null || echo unknown)"
+  echo "  (a new Google-managed certificate takes 15-60 minutes to become Active)"
+  echo
+  echo "Workbench: https://$host"
+  if [[ -z $google_ready ]]; then
+    cat <<M
+
+Sign-in needs one step in the console before it works:
+  1. APIs & Services > OAuth consent screen: set it up (External, add yourself as a test user).
+  2. APIs & Services > Credentials > Create OAuth client ID > Web application, with redirect URI
+       https://${PROJECT_ID}.firebaseapp.com/__/auth/handler
+  3. Identity Platform > Providers > Add a provider > Google: paste that client ID and secret, enable it.
+Then open https://$host and sign in with an account in WORKBENCH_ADMINS.
+M
+  fi
+}
+
+phase_unexpose() {
+  kubeconfig
+  load_exposure
+  [[ -n $EXPOSED ]] || { echo "not exposed"; return 0; }
+  say "Removing public exposure (the static IP, allowlist and keys stay for next time)"
+  rm -f "$EXPOSE_ENV"
+  phase_workbench
 }
 
 phase_status() {
@@ -510,8 +697,10 @@ case ${1:-} in
   workbench) phase_check; phase_workbench ;;
   smoke) phase_check; phase_smoke ;;
   model) phase_check; phase_model ;;
+  expose) phase_check; phase_expose ;;
+  unexpose) phase_check; phase_unexpose ;;
   all) phase_check; phase_infra; phase_images; phase_kagent; phase_workbench; phase_smoke ;;
   status) phase_status ;;
   down) phase_down ;;
-  *) sed -n '2,25p' "$0"; exit 2 ;;
+  *) sed -n '2,29p' "$0"; exit 2 ;;
 esac

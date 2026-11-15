@@ -10,8 +10,12 @@ does.
   the app and proxies `/api/` to the Workbench server (gRPC-Web and kagent's
   A2A). The controller's other ports, `/mcp`, the hooks listener and
   Postgres stay cluster-internal.
-- **Edge.** A GKE Gateway (`gke-l7-global-external-managed`) with a reserved
-  static IP and a Google-managed certificate. The hostname is
+- **Edge.** GKE's Ingress (the external Application Load Balancer) with a
+  reserved static IP, a `ManagedCertificate`, and a `BackendConfig` that
+  sets a one-hour backend timeout (chat turns stream) and attaches Cloud
+  Armor. The Gateway API would do the same with more moving parts
+  (Certificate Manager, policy attachments); nothing here depends on the
+  choice. The hostname is
   `<ip-with-dashes>.sslip.io` until a real domain exists, which lets Google
   issue the certificate with no DNS setup. While only the team is testing, a
   Cloud Armor policy allows listed source IP ranges and denies the rest, so
