@@ -413,7 +413,17 @@ or give the deploying account Project IAM Admin (roles/resourcemanager.projectIa
   NAMESPACE=$NAMESPACE PROJECT_ID=$PROJECT_ID GEMINI_LOCATION=$GEMINI_LOCATION GEMINI_MODEL=$GEMINI_MODEL \
     python3 -c 'import os,string,sys; print(string.Template(sys.stdin.read()).substitute(os.environ))' \
     < "$ROOT/deploy/model/gemini.yaml.tmpl" | kubectl apply -f -
-  kubectl -n "$NAMESPACE" wait agent/workbench-gemini-check --for=condition=Ready --timeout 5m
+  if ! kubectl -n "$NAMESPACE" wait agent/workbench-gemini-check --for=condition=Ready --timeout 5m; then
+    say "The check agent is not Ready; its status"
+    local kind
+    for kind in modelconfig/workbench-gemini agenttemplate/workbench-gemini-check agent/workbench-gemini-check; do
+      echo "--- $kind" >&2
+      kubectl -n "$NAMESPACE" get "$kind" -o jsonpath='{.status}' >&2 || true; echo >&2
+    done
+    kubectl -n "$NAMESPACE" logs deploy/kagent-controller --all-containers --since=10m 2>&1 |
+      grep -iE 'gemini|vertex|level=(warn|error)|"level":"(warn|error)"' | tail -40 >&2 || true
+    return 1
+  fi
 
   say "Real-model check"
   if ! smoke_api chat -agent "$NAMESPACE/workbench-gemini-check"; then
