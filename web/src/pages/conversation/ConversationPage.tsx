@@ -17,6 +17,7 @@ import { Dialog } from "@/ui/Dialog";
 import { ErrorBanner, Loading } from "@/ui/States";
 import { useToast } from "@/ui/Toast";
 import { ActivityPanel, StatusIcon } from "./ActivityPanel";
+import { collapseRuns, newestRuns, targetOf } from "@/conversation/toolRuns";
 import { takeFirstMessage } from "./firstMessage";
 import { QuestionCard } from "./QuestionCard";
 import { ShareDialog } from "./ShareDialog";
@@ -371,30 +372,38 @@ function renderGroup(group: Group, ctx: RenderCtx) {
   }
 }
 
+/** Rows shown in a step summary; earlier ones are counted and live in Activity. */
+const SUMMARY_ROWS = 4;
+
 function ToolSummary({ tools, onOpen }: { tools: ToolActivity[]; onOpen: () => void }) {
+  const { shown, hidden } = newestRuns(collapseRuns(tools), SUMMARY_ROWS);
   return (
     <button type="button" className="tool-summary" onClick={onOpen}>
       <span className="sr-only">{tools.length === 1 ? "1 step" : `${tools.length} steps`}, show details in Activity: </span>
+      {hidden > 0 && (
+        <span className="tool-summary-more">
+          {hidden === 1 ? "1 earlier step" : `${hidden} earlier steps`}
+        </span>
+      )}
       <ul>
-        {tools.map((t) => (
+        {shown.map(({ latest: t, count, earlierFailures }) => (
           <li key={t.id}>
             <StatusIcon status={t.status} />
             <span>
               <span className="muted">{t.status === "waiting" ? "Waiting for approval to" : CATEGORY_LABEL[toolCategory(t.name)]}</span>{" "}
               {humanToolName(t.name).toLowerCase()}
-              {pathOf(t.args) && <code>{pathOf(t.args)}</code>}
+              {targetOf(t.args) && <code>{targetOf(t.args)}</code>}
             </span>
+            {count > 1 && (
+              <span className="tool-count" title={earlierFailures ? `${earlierFailures} of the earlier tries failed` : undefined}>
+                ×{count}
+              </span>
+            )}
           </li>
         ))}
       </ul>
     </button>
   );
-}
-
-function pathOf(args: unknown): string | undefined {
-  if (!args || typeof args !== "object") return undefined;
-  const v = (args as Record<string, unknown>).path ?? (args as Record<string, unknown>).name;
-  return typeof v === "string" ? v : undefined;
 }
 
 function MessageBubble({ message }: { message: ChatMessage }) {

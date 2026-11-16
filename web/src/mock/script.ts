@@ -249,6 +249,11 @@ export async function buildScript(s: ScriptCtx, prompt: string): Promise<void> {
   s.a2ui([{ version: "v0.9.1", updateDataModel: { surfaceId: "deploy-1", path: "/build/percent", value: 50 } }]);
   await s.tool("write_file", { path: "tests/test_expenses.py", bytes: 1710 }, { content: [{ type: "text", text: "Saved tests/test_expenses.py" }], isError: false }, 400);
   await s.tool("run_tests", { command: "pytest -q" }, { content: [{ type: "text", text: "12 passed in 1.84s" }], isError: false }, 900);
+  // An agent polling a build: the conversation shows it as one row with a count.
+  await s.tool("build_start_image", { project: "expense-tracker" }, { content: [{ type: "text", text: '{"build_id":"b-1"}' }], isError: false }, 300);
+  for (let i = 0; i < 5; i++) {
+    await s.tool("build_get_status", { build_id: "b-1" }, { content: [{ type: "text", text: '{"status":"WORKING"}' }], isError: false }, 250);
+  }
   s.a2ui([
     {
       version: "v0.9.1",
