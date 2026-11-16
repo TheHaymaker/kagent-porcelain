@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 )
 
 // ExtensionURI identifies kagent's HITL extension.
@@ -138,7 +139,7 @@ func ReadRequest(taskID, contextID string, msg *Message) (Request, bool) {
 		return Request{}, false
 	}
 	req := Request{TaskID: taskID, ContextID: contextID}
-	if h, ok := payload["hint"].(string); ok {
+	if h, ok := payload["hint"].(string); ok && !harnessBoilerplate(h) {
 		req.Hint = h
 	}
 	nested, _ := payload["nested"].(map[string]any)
@@ -241,4 +242,13 @@ func ToolApprovalResponse(req Request, decisions []Decision, messageID string) (
 		Metadata:   map[string]any{ExtensionURI: map[string]any{"type": "tool_approval_response", "approvals": approvals}},
 		Extensions: []string{ExtensionURI},
 	}, nil
+}
+
+// harnessBoilerplate reports a hint that is the harness's own instruction to
+// its client (ADK's "Please approve or reject the tool call ... with a
+// FunctionResponse ..."), which means nothing to a person. Workbench then
+// describes the call itself.
+func harnessBoilerplate(h string) bool {
+	h = strings.TrimSpace(h)
+	return strings.HasPrefix(h, "Please approve or reject the tool call") || strings.Contains(h, "FunctionResponse")
 }

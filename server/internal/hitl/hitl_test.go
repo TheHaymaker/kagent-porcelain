@@ -137,3 +137,16 @@ func TestToolApprovalResponse(t *testing.T) {
 		t.Fatal("an extra decision must be an error")
 	}
 }
+
+func TestHarnessBoilerplateHintIsDropped(t *testing.T) {
+	adk := "Please approve or reject the tool call cloudrun_deploy_preview() by responding with a FunctionResponse with an expected ToolConfirmation payload."
+	u := decode(t)
+	u.StatusUpdate.Status.Message.Metadata[ExtensionURI].(map[string]any)["hint"] = adk
+	req, ok := ReadRequest(u.StatusUpdate.TaskID, u.StatusUpdate.ContextID, u.StatusUpdate.Status.Message)
+	if !ok || req.Hint != "" {
+		t.Fatalf("boilerplate kept: %q", req.Hint)
+	}
+	if !harnessBoilerplate(adk) || harnessBoilerplate("Approval is required for tool(s): x") {
+		t.Fatal("boilerplate detection is wrong")
+	}
+}

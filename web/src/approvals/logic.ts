@@ -2,7 +2,12 @@
  * What the client may draw for an approval. Every answer is read off the
  * Approval the ApprovalService returned; nothing here decides policy.
  */
-import { ActionKind, ApprovalState, RememberScope, type Approval } from "@/gen/workbench/v1/approvals_pb";
+import {
+  ActionKind,
+  ApprovalState,
+  RememberScope,
+  type Approval,
+} from "@/gen/workbench/v1/approvals_pb";
 import { personName } from "@/lib/format";
 
 /** Buttons appear only for a pending approval the server says the caller may decide. */
@@ -43,8 +48,12 @@ export function humanGroup(group: string): string {
  * Why the caller sees no buttons, in plain words. `myId` is the signed-in
  * principal; the server's flags decide, this only explains them.
  */
-export function whyNotDecider(approval: Approval, myId: string | undefined): string | undefined {
-  if (approval.state !== ApprovalState.PENDING || approval.callerMayDecide) return undefined;
+export function whyNotDecider(
+  approval: Approval,
+  myId: string | undefined,
+): string | undefined {
+  if (approval.state !== ApprovalState.PENDING || approval.callerMayDecide)
+    return undefined;
   const isRequester = !!myId && approval.requester?.id === myId;
   if (isRequester && !approval.requesterMayDecide) {
     return approval.kind === ActionKind.PRODUCTION_DEPLOY
@@ -54,12 +63,47 @@ export function whyNotDecider(approval: Approval, myId: string | undefined): str
   return undefined;
 }
 
+/** What a tool call does, in words a requester recognises. */
+const ACTIONS: Record<string, string> = {
+  cloudrun_deploy_preview: "Deploy the test version",
+  cloudrun_delete_preview_service: "Delete the test version",
+  cloudrun_set_iam_invoker: "Change who can open the test version",
+  cloudrun_get_service: "Check the test version",
+  cloudrun_list_revisions: "List the test version's releases",
+  cloudrun_read_logs: "Read the test version's logs",
+  workbench_request_promotion: "Put the app live",
+  bigquery_delete_table: "Delete a data table",
+  bigquery_create_dataset: "Create a dataset",
+};
+
+function describeCall(name: string, args: unknown): string {
+  const action =
+    ACTIONS[name] ??
+    name
+      .replace(/^[a-z]+_/, "")
+      .replace(/_/g, " ")
+      .replace(/^./, (c) => c.toUpperCase());
+  const a = (args && typeof args === "object" ? args : {}) as Record<
+    string,
+    unknown
+  >;
+  const target = [a.service, a.appId, a.app, a.table].find(
+    (v) => typeof v === "string" && v,
+  );
+  return target ? `${action}: ${String(target)}` : action;
+}
+
 export function approvalTitle(approval: Approval): string {
   if (approval.hint) return approval.hint;
-  const names = approval.calls.map((c) => c.name).filter(Boolean);
-  return names.length ? `Allow ${names.join(", ")}?` : "Approval needed";
+  const calls = approval.calls.filter((c) => c.name);
+  if (!calls.length) return "Approval needed";
+  const parts = calls.map((c) => describeCall(c.name, c.args));
+  return `${parts.join("; ")}?`;
 }
 
 export function isSettled(approval: Approval): boolean {
-  return approval.state !== ApprovalState.PENDING && approval.state !== ApprovalState.UNSPECIFIED;
+  return (
+    approval.state !== ApprovalState.PENDING &&
+    approval.state !== ApprovalState.UNSPECIFIED
+  );
 }
