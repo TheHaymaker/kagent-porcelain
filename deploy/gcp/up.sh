@@ -19,6 +19,7 @@
 #   up.sh gitlab-find  list GitLab connections Google Cloud holds (read-only)
 #   up.sh gitlab-check what GITLAB_TOKEN acts as and can reach (read-only)
 #   up.sh gitlab-setup GitLab group, apps/templates subgroups, scaffolds
+#   up.sh gitlab-republish  the same, replacing the template projects' files with scaffolds/
 #   up.sh tools      builds repo, buckets, service accounts and the builder's
 #                    tool servers (needs gitlab-setup)
 #   up.sh builder    the Gemini builder agent and its planner, tester and reviewer helpers
@@ -1053,6 +1054,7 @@ case ${1:-} in
   gitlab-find) phase_check; phase_gitlab_find ;;
   gitlab-check) phase_gitlab_check ;;
   gitlab-setup) phase_gitlab_setup ;;
+  gitlab-republish) GITLAB_REPUBLISH=1 phase_gitlab_setup ;;
   tools) phase_check; phase_tools ;;
   builder) phase_check; phase_builder ;;
   web-check) phase_web_check ;;
