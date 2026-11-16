@@ -16,6 +16,8 @@ RUN npm run build
 # envsubst at start, so API_UPSTREAM is set per deployment.
 FROM nginxinc/nginx-unprivileged:1.27-alpine
 ENV NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx/conf.d
+# Overridden per deployment when Identity Platform sign-in is used (ADR 0005).
+ENV AUTH_HANDLER_UPSTREAM=https://firebaseapp.com
 COPY web/nginx/templates/ /etc/nginx/templates/
 COPY --from=build /src/web/dist /usr/share/nginx/html
 EXPOSE 8080

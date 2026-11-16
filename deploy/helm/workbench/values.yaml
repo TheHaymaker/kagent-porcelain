@@ -35,3 +35,6 @@ web:
   #     timeoutSec: 3600                 # chat turns stream for minutes
   #     securityPolicy: workbench-allowlist   # Cloud Armor
   gke: {}
+  # https://<project>.firebaseapp.com when the web app signs in with Identity
+  # Platform: nginx serves its handler at /__/ on the app's own host.
+  authHandlerUpstream: ""

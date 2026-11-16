@@ -37,6 +37,11 @@ spec:
             # nginx proxies /api to the Workbench server, same origin as the app.
             - name: API_UPSTREAM
               value: http://{{ .Values.kagent.fullname }}-controller.{{ .Release.Namespace }}.svc:8083
+            {{- with .Values.web.authHandlerUpstream }}
+            # Identity Platform's sign-in handler, proxied at /__/ (ADR 0005).
+            - name: AUTH_HANDLER_UPSTREAM
+              value: {{ . }}
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /usr/share/nginx/html/config.json

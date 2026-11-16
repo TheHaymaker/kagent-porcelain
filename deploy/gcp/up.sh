@@ -523,6 +523,7 @@ W
   cat <<W
   host: $EXPOSE_HOST
   ingress: {enabled: true}
+  authHandlerUpstream: https://${PROJECT_ID}.firebaseapp.com
   gke:
     staticIPName: workbench-web
     managedCertificate: true
@@ -533,7 +534,8 @@ W
     authProvider: identity-platform
     identityPlatform:
       apiKey: $(<"$STATE/secrets/browser-api-key")
-      authDomain: ${PROJECT_ID}.firebaseapp.com
+      # The app's own host: nginx proxies the sign-in handler at /__/.
+      authDomain: $EXPOSE_HOST
       projectId: $PROJECT_ID
 W
 }
@@ -676,8 +678,8 @@ print(json.dumps({"authorizedDomains": d}))' "$STATE/idp.json" "$host" "${PROJEC
 
 Sign-in needs one step in the console before it works:
   1. APIs & Services > OAuth consent screen: set it up (External, add yourself as a test user).
-  2. APIs & Services > Credentials > Create OAuth client ID > Web application, with redirect URI
-       https://${PROJECT_ID}.firebaseapp.com/__/auth/handler
+  2. APIs & Services > Credentials > Create OAuth client ID > Web application, with redirect URIs
+       https://$host/__/auth/handler and https://${PROJECT_ID}.firebaseapp.com/__/auth/handler
   3. Identity Platform > Providers > Add a provider > Google: paste that client ID and secret, enable it.
 Then open https://$host and sign in with an account in WORKBENCH_ADMINS.
 M
