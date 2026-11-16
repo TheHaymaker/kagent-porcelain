@@ -902,7 +902,13 @@ phase_tools() {
   # grants access on each test version.
   say "IAP for test versions"
   gc services enable iap.googleapis.com >/dev/null
-  gcloud beta services identity create --service=iap.googleapis.com --project "$PROJECT_ID" >/dev/null 2>&1 || true
+  # Create IAP's service agent (gcloud's command for this is beta-only).
+  local code
+  code=$(curl -s -o "$STATE/iap-identity.json" -w '%{http_code}' -X POST \
+    -H "Authorization: Bearer $(gcloud auth print-access-token)" -H 'Content-Type: application/json' -d '{}' \
+    "https://serviceusage.googleapis.com/v1beta1/projects/$number/services/iap.googleapis.com:generateServiceIdentity")
+  [[ $code == 200 ]] || { head -c 300 "$STATE/iap-identity.json" >&2; die "cannot create IAP's service agent (HTTP $code)"; }
+  rm -f "$STATE/iap-identity.json"
   grant_project "serviceAccount:service-$number@gcp-sa-iap.iam.gserviceaccount.com" roles/run.invoker
   grant_project "$pool/cloudrun-mcp" roles/iap.admin
   # Without a Google Workspace organization, IAP needs its own OAuth client
