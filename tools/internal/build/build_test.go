@@ -74,7 +74,17 @@ func (f *fakeGCP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/upload/storage/v1/b/wb-staging/o"):
 		b, _ := io.ReadAll(r.Body)
-		f.uploaded[r.URL.Query().Get("name")] = string(b)
+		name := r.URL.Query().Get("name")
+		if _, ok := f.uploaded[name]; ok {
+			// As GCS answers a create-only write to an existing object.
+			if r.URL.Query().Get("ifGenerationMatch") != "0" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			w.WriteHeader(http.StatusPreconditionFailed)
+			return
+		}
+		f.uploaded[name] = string(b)
 		_, _ = w.Write([]byte(`{}`))
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/projects/wb-builds/builds":
 		_ = json.NewDecoder(r.Body).Decode(&f.created)
@@ -180,6 +190,8 @@ func TestRunChecksChoosesStepsFromTheProject(t *testing.T) {
 	if strings.Contains(string(b), `"images"`) {
 		t.Errorf("a check run must push no image: %s", b)
 	}
+	// A second run at the same commit reuses the uploaded source.
+	mcpxtest.MustOK(t, cs, "build_run_checks", map[string]any{"project": "py-app"}, &out)
 	mcpxtest.MustOK(t, cs, "build_run_checks", map[string]any{"project": "node-app"}, &out)
 	if strings.Join(out.Checks, ",") != "install,lint,tests" {
 		t.Fatalf("%+v", out)

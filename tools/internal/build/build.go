@@ -196,7 +196,7 @@ func (c *Client) create(ctx context.Context, body map[string]any) (id, logURL st
 
 // Checks images: the same toolchains the scaffolds' CI uses.
 const (
-	uvImage   = "ghcr.io/astral-sh/uv:0.11.32-python3.12-bookworm-slim"
+	uvImage   = "ghcr.io/astral-sh/uv:0.11.32-python3.12-trixie-slim"
 	nodeImage = "node:22-bookworm-slim"
 )
 
@@ -304,8 +304,12 @@ func (c *Client) checks(ctx context.Context, call mcpx.Call, in StartIn) (Checks
 	return ChecksOut{BuildID: id, Project: snap.Project, Commit: snap.SHA, Checks: names, LogURL: logURL}, nil
 }
 
+// upload stores a commit's source once. Objects are named by commit, so an
+// object that already exists holds the same tree: ifGenerationMatch=0 makes
+// the write create-only (the server may create objects, not overwrite them)
+// and a 412 means it is already there.
 func (c *Client) upload(ctx context.Context, object string, data []byte) error {
-	u := c.cfg.StorageURL + "/upload/storage/v1/b/" + url.PathEscape(c.cfg.Bucket) + "/o?uploadType=media&name=" + url.QueryEscape(object)
+	u := c.cfg.StorageURL + "/upload/storage/v1/b/" + url.PathEscape(c.cfg.Bucket) + "/o?uploadType=media&ifGenerationMatch=0&name=" + url.QueryEscape(object)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(data))
 	if err != nil {
 		return err
@@ -316,6 +320,9 @@ func (c *Client) upload(ctx context.Context, object string, data []byte) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusPreconditionFailed {
+		return nil
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
