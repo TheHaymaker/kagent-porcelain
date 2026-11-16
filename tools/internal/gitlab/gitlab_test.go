@@ -118,15 +118,16 @@ func TestToolsAndAnnotations(t *testing.T) {
 	_, cs := setup(t)
 	tools := mcpxtest.ToolMap(t, cs)
 	want := map[string]mcpxtest.Hints{
-		"gitlab_create_project":       {ReadOnly: false, Destructive: false, Idempotent: false, OpenWorld: false},
-		"gitlab_get_project":          {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
-		"gitlab_list_branches":        {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
-		"gitlab_list_files":           {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
-		"gitlab_get_file":             {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
-		"gitlab_create_branch":        {ReadOnly: false, Destructive: false, Idempotent: false, OpenWorld: false},
-		"gitlab_commit_files":         {ReadOnly: false, Destructive: true, Idempotent: false, OpenWorld: false},
-		"gitlab_create_merge_request": {ReadOnly: false, Destructive: false, Idempotent: false, OpenWorld: false},
-		"gitlab_get_pipeline_status":  {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
+		"gitlab_create_project":        {ReadOnly: false, Destructive: false, Idempotent: false, OpenWorld: false},
+		"gitlab_get_project":           {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
+		"gitlab_list_branches":         {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
+		"gitlab_list_files":            {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
+		"gitlab_get_file":              {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
+		"gitlab_create_branch":         {ReadOnly: false, Destructive: false, Idempotent: false, OpenWorld: false},
+		"gitlab_commit_files":          {ReadOnly: false, Destructive: true, Idempotent: false, OpenWorld: false},
+		"gitlab_create_merge_request":  {ReadOnly: false, Destructive: false, Idempotent: false, OpenWorld: false},
+		"gitlab_restore_from_template": {ReadOnly: false, Destructive: true, Idempotent: false, OpenWorld: false},
+		"gitlab_get_pipeline_status":   {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
 	}
 	if len(tools) != len(want) {
 		t.Fatalf("got %d tools, want %d", len(tools), len(want))
@@ -481,4 +482,47 @@ func TestListAndReadFiles(t *testing.T) {
 	}
 	mcpxtest.MustErr(t, cs, "gitlab_get_file", map[string]any{"project": "my-app", "path": "logo.png", "ref": "main"}, "not a text file")
 	mcpxtest.MustErr(t, cs, "gitlab_get_file", map[string]any{"project": "my-app", "path": "../secrets", "ref": "main"}, "path")
+}
+
+func TestRestoreFromTemplate(t *testing.T) {
+	f, cs := setup(t)
+	f.projects["/api/v4/projects/workbench%2Fapps%2Fmy-app"]["forked_from_project"] = map[string]any{"path_with_namespace": "workbench/templates/node-app"}
+	f.handlers["GET /api/v4/projects/10/repository/files/uv.lock"] = func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("ref") != "main" {
+			t.Errorf("template ref %q", r.URL.Query().Get("ref"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"size": 4, "encoding": "base64", "content": "bG9jaw=="})
+	}
+	f.handlers["GET /api/v4/projects/10/repository/files/pyproject.toml"] = func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"size": 4, "encoding": "base64", "content": "cHJvag=="})
+	}
+	// pyproject.toml is still in the app; uv.lock was deleted.
+	f.handlers["HEAD /api/v4/projects/42/repository/files/pyproject.toml"] = func(w http.ResponseWriter, r *http.Request) {}
+	f.handlers["POST /api/v4/projects/42/repository/commits"] = func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "abc123", "short_id": "abc", "title": "Restore"})
+	}
+	var out RestoreOut
+	mcpxtest.MustOK(t, cs, "gitlab_restore_from_template", map[string]any{"project": "my-app", "paths": []string{"uv.lock", "pyproject.toml"}}, &out)
+	if out.SHA != "abc123" || out.Template != "workbench/templates/node-app" || len(out.Restored) != 2 {
+		t.Fatalf("unexpected %+v", out)
+	}
+	body := f.last().Body
+	if body["branch"] != "main" || !strings.Contains(body["commit_message"].(string), "Workbench-Requester: alice@example.com") {
+		t.Fatalf("commit %+v", body)
+	}
+	acts := body["actions"].([]any)
+	a0, a1 := acts[0].(map[string]any), acts[1].(map[string]any)
+	if a0["action"] != "create" || a0["content"] != "bG9jaw==" || a0["encoding"] != "base64" || a1["action"] != "update" {
+		t.Fatalf("actions %+v", acts)
+	}
+
+	mcpxtest.MustErr(t, cs, "gitlab_restore_from_template", map[string]any{"project": "my-app", "paths": []string{"missing.txt"}}, "has no missing.txt")
+	mcpxtest.MustErr(t, cs, "gitlab_restore_from_template", map[string]any{"project": "my-app", "paths": []string{"../etc"}}, "paths")
+	mcpxtest.MustErr(t, cs, "gitlab_restore_from_template", map[string]any{"project": "my-app", "paths": []string{}}, "paths")
+
+	// Forked from somewhere else: refused.
+	f.projects["/api/v4/projects/workbench%2Fapps%2Fmy-app"]["forked_from_project"] = map[string]any{"path_with_namespace": "elsewhere/evil"}
+	mcpxtest.MustErr(t, cs, "gitlab_restore_from_template", map[string]any{"project": "my-app", "paths": []string{"uv.lock"}}, "not a Workbench template")
+	delete(f.projects["/api/v4/projects/workbench%2Fapps%2Fmy-app"], "forked_from_project")
+	mcpxtest.MustErr(t, cs, "gitlab_restore_from_template", map[string]any{"project": "my-app", "paths": []string{"uv.lock"}}, "not created from a template")
 }

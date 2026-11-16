@@ -132,6 +132,7 @@ the group. Writes then use the numeric id.
 | `gitlab_get_file` | one text file at a ref (≤256 KiB; binary refused) | yes | no | yes | no | no |
 | `gitlab_create_branch` | branch from ref (default: default branch) | no | no | no | no | no |
 | `gitlab_commit_files` | one commit with ≤100 create/update/delete/move actions, ≤5 MiB; text or base64; appends `Workbench-Requester` trailer | no | yes | no | no | no |
+| `gitlab_restore_from_template` | puts ≤20 files (≤4 MiB) back as the project's template has them, in one commit; the template is the project the app was forked from and must be in the template group; for lockfiles and build files an agent cannot regenerate | no | yes | no | no | no |
 | `gitlab_create_merge_request` | MR within the same project (`target_project_id` pinned, never the template upstream); optional draft | no | no | no | no | no |
 | `gitlab_get_pipeline_status` | latest pipeline for a ref (or by id) + ≤50 jobs with failure reasons | yes | no | yes | no | no |
 

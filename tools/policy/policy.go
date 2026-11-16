@@ -62,7 +62,7 @@ func AlwaysAsk(tool string, args map[string]any) bool { return len(Classify(tool
 var Tools = map[string][]string{
 	"gitlab-mcp": {
 		"gitlab_create_project", "gitlab_get_project", "gitlab_list_branches", "gitlab_list_files",
-		"gitlab_get_file", "gitlab_create_branch", "gitlab_commit_files", "gitlab_create_merge_request",
+		"gitlab_get_file", "gitlab_create_branch", "gitlab_commit_files", "gitlab_restore_from_template", "gitlab_create_merge_request",
 		"gitlab_get_pipeline_status",
 	},
 	"build-mcp": {

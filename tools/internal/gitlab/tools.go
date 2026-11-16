@@ -75,6 +75,13 @@ func Register(s *mcpx.Server, c *Client) {
 		Annotations: mcpx.Mutating("Commit files to GitLab", true, false, false),
 	}, c.commitFiles)
 	mcpx.AddTool(s, &mcp.Tool{
+		Name: "gitlab_restore_from_template",
+		Description: fmt.Sprintf("Put up to %d files back as they are in the project's template (the scaffold it was forked from), in one commit. "+
+			"Use it to undo a broken lockfile (uv.lock, package-lock.json), Dockerfile, Makefile, CI file or pyproject.toml/package.json: files you cannot read or regenerate yourself. "+
+			"Files the template does not have are refused.", MaxRestoreFiles),
+		Annotations: mcpx.Mutating("Restore files from the template", true, false, false),
+	}, c.restoreFromTemplate)
+	mcpx.AddTool(s, &mcp.Tool{
 		Name:        "gitlab_create_merge_request",
 		Description: "Open a merge request within the same Workbench project (source branch -> target branch, default: the project's default branch).",
 		Annotations: mcpx.Mutating("Create GitLab merge request", false, false, false),
@@ -662,4 +669,116 @@ func (c *Client) getFile(ctx context.Context, _ mcpx.Call, in GetFileIn) (GetFil
 		return GetFileOut{}, fmt.Errorf("%s is not a text file", in.Path)
 	}
 	return GetFileOut{Path: in.Path, Ref: ref, Content: string(data)}, nil
+}
+
+// ---- restore from template ----
+
+// RestoreIn are the arguments of gitlab_restore_from_template.
+type RestoreIn struct {
+	Project string   `json:"project" jsonschema:"project name or full path"`
+	Paths   []string `json:"paths" jsonschema:"files to put back as the template has them, e.g. [\"uv.lock\", \"pyproject.toml\"]"`
+	Branch  string   `json:"branch,omitempty" jsonschema:"branch to commit to (default: the default branch)"`
+}
+
+// RestoreOut is the result of gitlab_restore_from_template.
+type RestoreOut struct {
+	Commit
+	Template string   `json:"template" jsonschema:"the template project the files came from"`
+	Restored []string `json:"restored"`
+}
+
+// Restore limits: a lockfile is a few hundred KiB.
+const (
+	MaxRestoreFiles = 20
+	MaxRestoreBytes = 4 << 20
+)
+
+func (c *Client) restoreFromTemplate(ctx context.Context, call mcpx.Call, in RestoreIn) (RestoreOut, error) {
+	if len(in.Paths) == 0 || len(in.Paths) > MaxRestoreFiles {
+		return RestoreOut{}, validate.Errorf("paths", "give 1 to %d files", MaxRestoreFiles)
+	}
+	seen := map[string]bool{}
+	for i, path := range in.Paths {
+		if err := validate.RepoPath(fmt.Sprintf("paths[%d]", i), path); err != nil {
+			return RestoreOut{}, err
+		}
+		if seen[path] {
+			return RestoreOut{}, validate.Errorf("paths", "%q appears more than once", path)
+		}
+		seen[path] = true
+	}
+	p, err := c.resolve(ctx, in.Project)
+	if err != nil {
+		return RestoreOut{}, err
+	}
+	branch := in.Branch
+	if branch == "" {
+		branch = p.DefaultBranch
+	}
+	if err := validate.GitRefName("branch", branch); err != nil {
+		return RestoreOut{}, err
+	}
+	// The template is the project the app was forked from, and only a
+	// project in the template group counts.
+	if p.ForkedFromProject == nil || p.ForkedFromProject.PathWithNamespace == "" {
+		return RestoreOut{}, fmt.Errorf("%s was not created from a template, so there is nothing to restore from", p.PathWithNamespace)
+	}
+	tmplPath := p.ForkedFromProject.PathWithNamespace
+	if !strings.HasPrefix(strings.ToLower(tmplPath), strings.ToLower(c.cfg.TemplateGroup)+"/") {
+		return RestoreOut{}, fmt.Errorf("%s was forked from %s, which is not a Workbench template", p.PathWithNamespace, tmplPath)
+	}
+	var tmpl apiProject
+	if _, err := c.do(ctx, http.MethodGet, "/projects/"+url.PathEscape(tmplPath), nil, nil, &tmpl); err != nil {
+		return RestoreOut{}, fmt.Errorf("template %s: %w", tmplPath, err)
+	}
+	total := 0
+	acts := make([]map[string]any, 0, len(in.Paths))
+	for _, path := range in.Paths {
+		var f struct {
+			Size     int    `json:"size"`
+			Encoding string `json:"encoding"`
+			Content  string `json:"content"`
+		}
+		q := url.Values{"ref": {tmpl.DefaultBranch}}
+		if _, err := c.do(ctx, http.MethodGet, "/projects/"+strconv.Itoa(tmpl.ID)+"/repository/files/"+url.PathEscape(path), q, nil, &f); err != nil {
+			if httpx.IsNotFound(err) {
+				return RestoreOut{}, fmt.Errorf("the template %s has no %s", tmplPath, path)
+			}
+			return RestoreOut{}, err
+		}
+		if f.Encoding != "base64" {
+			return RestoreOut{}, fmt.Errorf("unexpected encoding for %s", path)
+		}
+		total += f.Size
+		if total > MaxRestoreBytes {
+			return RestoreOut{}, fmt.Errorf("the files total more than %d bytes; restore fewer at once", MaxRestoreBytes)
+		}
+		// update if the project still has the file, create if it was deleted.
+		action := "update"
+		if _, err := c.do(ctx, http.MethodHead, "/projects/"+pid(p)+"/repository/files/"+url.PathEscape(path), url.Values{"ref": {branch}}, nil, nil); err != nil {
+			if !httpx.IsNotFound(err) {
+				return RestoreOut{}, err
+			}
+			action = "create"
+		}
+		acts = append(acts, map[string]any{"action": action, "file_path": path, "content": f.Content, "encoding": "base64"})
+	}
+	body := map[string]any{
+		"branch":         branch,
+		"commit_message": withTrailer("Restore "+strings.Join(in.Paths, ", ")+" from the "+tmpl.Name+" template", call.Requester),
+		"actions":        acts,
+	}
+	var res struct {
+		ID      string `json:"id"`
+		ShortID string `json:"short_id"`
+		Title   string `json:"title"`
+		WebURL  string `json:"web_url"`
+	}
+	if _, err := c.do(ctx, http.MethodPost, "/projects/"+pid(p)+"/repository/commits", nil, body, &res); err != nil {
+		return RestoreOut{}, err
+	}
+	return RestoreOut{
+		Commit:   Commit{SHA: res.ID, ShortID: res.ShortID, Title: res.Title, WebURL: res.WebURL, Files: len(acts)},
+		Template: tmplPath, Restored: in.Paths,
+	}, nil
 }
