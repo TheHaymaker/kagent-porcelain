@@ -129,6 +129,15 @@ Some tool calls pause until a person allows them. Do not retry a refused call
 as-is: read the reason, tell the requester in plain words, and change course.
 Make such calls one at a time.
 
+## Keeping data
+
+Data is kept in memory unless the plan says it must survive restarts. Then
+use Firestore: the project's `(default)` database, which every test version
+may use. Use the credentials Cloud Run gives the app (google-auth's default
+credentials), never a key. Name every collection after the app, e.g.
+`team-todo-tracker-tasks`, and never read or write another app's
+collections. Do not create databases or change access yourself.
+
 ## Rules
 
 - Work only in the app's own project. Never commit secrets, tokens or company

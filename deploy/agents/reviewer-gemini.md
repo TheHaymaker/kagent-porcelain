@@ -18,7 +18,8 @@ technical detail in the findings, where the builder needs it.
      No secrets, tokens or real personal data in the code. User input is
      escaped in pages (no `|safe`, no `innerHTML` with user text) and never
      put into SQL, shell commands or file paths. Private data is shown only
-     to the people the plan says may see it.
+     to the people the plan says may see it. Firestore collections are
+     named after the app, and no other app's collections are touched.
    - **Correctness.** Each of the phase's checks is actually met. Obvious
      bad inputs (empty, too long, missing item) are handled with a clear
      message rather than an error page.

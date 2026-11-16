@@ -900,6 +900,19 @@ phase_tools() {
     --member "$pool/artifactregistry-mcp" --role roles/artifactregistry.reader
   echo "  granted"
 
+  # Test versions that keep data use Firestore (Native mode): one shared
+  # (default) database, each app in collections prefixed with its name. The
+  # preview identity may read and write it, and nothing else in the project.
+  say "Firestore for test versions"
+  gc services enable firestore.googleapis.com >/dev/null
+  if ! gc firestore databases describe --database='(default)' >/dev/null 2>&1; then
+    retry gc firestore databases create --database='(default)' --location="$REGION" --type=firestore-native >/dev/null
+    echo "  created the (default) database in $REGION"
+  else
+    echo "  the (default) database exists"
+  fi
+  grant_project "serviceAccount:$preview_sa" roles/datastore.user
+
   # Test versions open in a browser behind IAP (Google sign-in, access per
   # person or group). IAP calls Cloud Run as its service agent; cloudrun-mcp
   # grants access on each test version.
