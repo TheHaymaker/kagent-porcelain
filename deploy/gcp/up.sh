@@ -889,6 +889,9 @@ phase_tools() {
   grant_project "$pool/cloudrun-mcp" roles/logging.viewer
   retry gc iam service-accounts add-iam-policy-binding "$preview_sa" --member "$pool/cloudrun-mcp" \
     --role roles/iam.serviceAccountUser
+  # Cloud Run checks that whoever deploys an image may download it.
+  retry gc artifacts repositories add-iam-policy-binding builds --location "$REGION" \
+    --member "$pool/cloudrun-mcp" --role roles/artifactregistry.reader
   # artifactregistry-mcp: read the builds repository.
   retry gc artifacts repositories add-iam-policy-binding builds --location "$REGION" \
     --member "$pool/artifactregistry-mcp" --role roles/artifactregistry.reader
