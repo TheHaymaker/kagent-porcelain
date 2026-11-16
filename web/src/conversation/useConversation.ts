@@ -7,21 +7,36 @@
  * ApprovalService.Decide and poll; when one settles, this hook follows the task
  * (A2A SubscribeToTask) to watch the agent carry on.
  */
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { api } from "@/api/clients";
 import { chatClient } from "@/api/chat/a2aChatClient";
-import { answerText, askUserAnswer, type PendingRequest } from "@/api/chat/hitl";
+import {
+  answerText,
+  askUserAnswer,
+  type PendingRequest,
+} from "@/api/chat/hitl";
 import type { ChatConversationRef, ChatEvent } from "@/api/chat/types";
 import { friendlyError, isAbort } from "@/api/errors";
 import { a2uiFromPart, a2uiFromSurface } from "@/a2ui/extract";
 import { SurfaceStore } from "@/a2ui/store";
+import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { ApprovalState, type Approval } from "@/gen/workbench/v1/approvals_pb";
 import type { Session } from "@/gen/kagent/api/v1/sessions_pb";
 import { newRequestId } from "@/lib/format";
 import { activeTurn, conversationReducer, initialConversation } from "./state";
 
 export function useConversation(sessionId: string, fallbackAgent: string) {
-  const [state, dispatch] = useReducer(conversationReducer, initialConversation);
+  const [state, dispatch] = useReducer(
+    conversationReducer,
+    initialConversation,
+  );
   const store = useMemo(() => new SurfaceStore(), []);
   const [session, setSession] = useState<Session>();
   const [loading, setLoading] = useState(true);
@@ -33,8 +48,13 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
   const followingRef = useRef(new Set<string>());
   const mounted = useRef(true);
 
-  const agent = session?.agent?.ref ? `${session.agent.ref.namespace}/${session.agent.ref.name}` : fallbackAgent;
-  const conversation: ChatConversationRef = useMemo(() => ({ id: sessionId, agent }), [sessionId, agent]);
+  const agent = session?.agent?.ref
+    ? `${session.agent.ref.namespace}/${session.agent.ref.name}`
+    : fallbackAgent;
+  const conversation: ChatConversationRef = useMemo(
+    () => ({ id: sessionId, agent }),
+    [sessionId, agent],
+  );
   const conversationRef = useRef(conversation);
   conversationRef.current = conversation;
 
@@ -58,7 +78,16 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
         for (const a of response.approvals) next[a.id] = a;
         return next;
       });
-      dispatch({ type: "approvals", approvals: response.approvals.map((a) => ({ id: a.id, taskId: a.taskId })) });
+      dispatch({
+        type: "approvals",
+        approvals: response.approvals.map((a) => ({
+          id: a.id,
+          taskId: a.taskId,
+          createdAt: a.createdAt
+            ? timestampDate(a.createdAt).toISOString()
+            : undefined,
+        })),
+      });
     } catch (err) {
       if (!isAbort(err)) setError(friendlyError(err));
     }
@@ -74,12 +103,13 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
           if (controller.signal.aborted) break;
           applySurfaces(event);
           dispatch({ type: "event", event });
-          if (event.type === "status" && event.state === "input_required" && event.awaiting?.kind === "tool_approval") {
+          // Any pause may be a tool approval; the stream does not always say so.
+          if (event.type === "status" && event.state === "input_required")
             void refreshApprovals();
-          }
         }
       } catch (err) {
-        if (!isAbort(err) && !controller.signal.aborted) setError(friendlyError(err));
+        if (!isAbort(err) && !controller.signal.aborted)
+          setError(friendlyError(err));
       } finally {
         if (streamRef.current === controller) {
           streamRef.current = undefined;
@@ -97,7 +127,14 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
       followingRef.current.add(taskId);
       const controller = new AbortController();
       try {
-        await run(chatClient().follow(conversationRef.current, taskId, controller.signal), controller);
+        await run(
+          chatClient().follow(
+            conversationRef.current,
+            taskId,
+            controller.signal,
+          ),
+          controller,
+        );
       } finally {
         followingRef.current.delete(taskId);
       }
@@ -114,14 +151,21 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
       setLoading(true);
       setLoadError(undefined);
       try {
-        const sessionResponse = await api.sessions.getSession({ sessionId }, { signal: controller.signal }).catch(() => undefined);
+        const sessionResponse = await api.sessions
+          .getSession({ sessionId }, { signal: controller.signal })
+          .catch(() => undefined);
         if (cancelled) return;
         if (sessionResponse?.session) setSession(sessionResponse.session);
         const ref = sessionResponse?.session?.agent?.ref;
-        const conv = { id: sessionId, agent: ref ? `${ref.namespace}/${ref.name}` : fallbackAgent };
+        const conv = {
+          id: sessionId,
+          agent: ref ? `${ref.namespace}/${ref.name}` : fallbackAgent,
+        };
         const [history, surfaces] = await Promise.all([
           chatClient().history(conv, { signal: controller.signal }),
-          api.components.listSurfaces({ sessionId }, { signal: controller.signal }).catch(() => undefined),
+          api.components
+            .listSurfaces({ sessionId }, { signal: controller.signal })
+            .catch(() => undefined),
         ]);
         if (cancelled) return;
         for (const message of history.messages) {
@@ -132,13 +176,21 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
         }
         dispatch({ type: "history", history });
         if (surfaces) {
-          for (const surface of surfaces.surfaces) store.apply(a2uiFromSurface(surface));
-          dispatch({ type: "surfaces", surfaces: surfaces.surfaces.map((s) => ({ surfaceId: s.surfaceId, taskId: s.taskId || undefined })) });
+          for (const surface of surfaces.surfaces)
+            store.apply(a2uiFromSurface(surface));
+          dispatch({
+            type: "surfaces",
+            surfaces: surfaces.surfaces.map((s) => ({
+              surfaceId: s.surfaceId,
+              taskId: s.taskId || undefined,
+            })),
+          });
         }
         await refreshApprovals();
         // A turn still running when the page opened is followed live.
         const last = history.turns.at(-1);
-        if (last && (last.state === "working" || last.state === "submitted")) void follow(last.taskId);
+        if (last && (last.state === "working" || last.state === "submitted"))
+          void follow(last.taskId);
       } catch (err) {
         if (!cancelled && !isAbort(err)) setLoadError(friendlyError(err));
       } finally {
@@ -161,11 +213,21 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
       const messageId = newRequestId();
       dispatch({
         type: "local-user",
-        message: { id: messageId, role: "user", parts: [{ kind: "text", text: trimmed }], createdAt: new Date().toISOString() },
+        message: {
+          id: messageId,
+          role: "user",
+          parts: [{ kind: "text", text: trimmed }],
+          createdAt: new Date().toISOString(),
+        },
       });
       const controller = new AbortController();
       await run(
-        chatClient().send({ conversation: conversationRef.current, text: trimmed, messageId, signal: controller.signal }),
+        chatClient().send({
+          conversation: conversationRef.current,
+          text: trimmed,
+          messageId,
+          signal: controller.signal,
+        }),
         controller,
       );
     },
@@ -174,11 +236,19 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
 
   /** ask_user questions are answered by the requester directly, in the same task. */
   const answer = useCallback(
-    async (request: Extract<PendingRequest, { kind: "ask_user" }>, answers: string[][]) => {
+    async (
+      request: Extract<PendingRequest, { kind: "ask_user" }>,
+      answers: string[][],
+    ) => {
       if (streamRef.current) return;
       const text = answerText(answers);
       const messageId = newRequestId();
-      dispatch({ type: "answered", requestId: request.requestId, answers, messageId });
+      dispatch({
+        type: "answered",
+        requestId: request.requestId,
+        answers,
+        messageId,
+      });
       const controller = new AbortController();
       await run(
         chatClient().send({
@@ -208,11 +278,24 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
     }
   }, [state]);
 
+  // While a turn is running or parked, look for new approvals every few
+  // seconds. A resumed task's stream does not always report its next pause,
+  // and without this the conversation would sit on "working" while the
+  // approval waited only in the Approvals queue.
+  const turnActive = activeTurn(state) !== undefined;
+  useEffect(() => {
+    if (!turnActive || loading) return;
+    const timer = window.setInterval(() => void refreshApprovals(), 4000);
+    return () => window.clearInterval(timer);
+  }, [turnActive, loading, refreshApprovals]);
+
   /** An approval card saw its approval decided: the agent resumes, so follow the task. */
   const onApprovalSettled = useCallback(
     (approval: Approval | string) => {
-      const record = typeof approval === "string" ? approvals[approval] : approval;
-      if (typeof approval !== "string") setApprovals((prev) => ({ ...prev, [approval.id]: approval }));
+      const record =
+        typeof approval === "string" ? approvals[approval] : approval;
+      if (typeof approval !== "string")
+        setApprovals((prev) => ({ ...prev, [approval.id]: approval }));
       const taskId = record?.taskId || state.awaiting?.taskId;
       if (!taskId) return;
       if (record && record.state === ApprovalState.SUPERSEDED) return;

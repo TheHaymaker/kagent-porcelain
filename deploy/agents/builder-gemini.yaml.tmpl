@@ -5,7 +5,7 @@
 # shell, skills and a reviewer subagent. This one runs on kagent's default
 # harness with the workbench-gemini model and works only through tools:
 # Workbench's own, GitLab (files and projects in the apps group), build
-# (Cloud Build), Cloud Run previews (every call needs approval) and the
+# (Cloud Build), Cloud Run previews (changes need approval) and the
 # builds repository.
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
@@ -28,8 +28,14 @@ spec:
         server: {kind: RemoteMCPServer, name: build-mcp}
     - mcp:
         server: {kind: RemoteMCPServer, name: artifactregistry-mcp}
+    # Cloud Run: reading status and logs runs freely; anything that changes a
+    # test version waits for a person.
     - mcp:
         server: {kind: RemoteMCPServer, name: cloudrun-mcp}
+        tools: [cloudrun_get_service, cloudrun_list_revisions, cloudrun_read_logs]
+    - mcp:
+        server: {kind: RemoteMCPServer, name: cloudrun-mcp}
+        tools: [cloudrun_deploy_preview, cloudrun_delete_preview_service, cloudrun_set_iam_invoker]
         requireApproval: true
 ---
 apiVersion: api.kagent.dev/v1alpha3
