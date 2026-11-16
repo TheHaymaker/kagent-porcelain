@@ -33,7 +33,10 @@ commands:
   lint: make lint
 rename:
   placeholder: workbench-app
-  files: [package.json, web/index.html, web/src/App.jsx, README.md]
+  # Never the package name in pyproject.toml or package.json: the lockfile
+  # records it, and a lockfile cannot be regenerated without a shell. The
+  # name people see comes from the files below.
+  files: [web/index.html, web/src/App.jsx, README.md]
 requiredApis:
   - run.googleapis.com
   - iap.googleapis.com

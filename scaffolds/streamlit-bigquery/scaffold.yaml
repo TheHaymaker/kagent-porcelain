@@ -35,7 +35,10 @@ commands:
   lint: make lint
 rename:
   placeholder: workbench-app
-  files: [pyproject.toml, app/streamlit_app.py, README.md]
+  # Never the package name in pyproject.toml or package.json: the lockfile
+  # records it, and a lockfile cannot be regenerated without a shell. The
+  # name people see comes from the files below.
+  files: [app/streamlit_app.py, README.md]
 configuration:
   BQ_PROJECT: project that runs (and pays for) query jobs
   BQ_LOCATION: dataset location, e.g. EU or US

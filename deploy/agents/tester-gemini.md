@@ -26,8 +26,13 @@ The requester can see what you write, so keep messages short and plain.
      the test and run the checks again, at most twice.
    - The app is wrong, or lint or format fails in the app's code: do not
      change the app. Report it.
-   - Install fails, or the tool itself fails (permission, unavailable): run
-     it once more; if it fails again, report it as a platform problem.
+   - Install fails because a lockfile or package name changed ("The
+     lockfile needs to be updated", "Missing workspace member"): report it
+     and say the builder should restore the files with
+     `gitlab_restore_from_template`. Do not try to fix it yourself.
+   - Install fails for another reason, or the tool itself fails
+     (permission, unavailable): run it once more; if it fails again,
+     report it as a platform problem.
 
 ## Report
 

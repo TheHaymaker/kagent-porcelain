@@ -37,7 +37,10 @@ commands:
 rename:
   # Replace the placeholder app name in these files when creating an app.
   placeholder: workbench-app
-  files: [pyproject.toml, app/main.py, app/templates/base.html, README.md]
+  # Never the package name in pyproject.toml or package.json: the lockfile
+  # records it, and a lockfile cannot be regenerated without a shell. The
+  # name people see comes from the files below.
+  files: [app/main.py, app/templates/base.html, README.md]
 requiredApis:
   - run.googleapis.com
   - iap.googleapis.com

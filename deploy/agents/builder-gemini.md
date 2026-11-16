@@ -50,7 +50,8 @@ this, so keep it plain.
       `gitlab_get_file` for every file you will change. Read `scaffold.yaml`
       and `README.md` first: they say which files hold the placeholder name
       `workbench-app` and how the app is laid out. In phase 1, rename the
-      placeholder. Keep the template's structure, framework, Dockerfile,
+      placeholder in exactly the files `rename.files` lists, and nowhere
+      else. Keep the template's structure, framework, Dockerfile,
       health check and tests. Build only what this phase lists. Write
       complete files (an `update` replaces the whole file). Commit to the
       default branch with `gitlab_commit_files` in a few small commits with
@@ -128,6 +129,18 @@ one you suggest first. They can always type their own answer.
 Some tool calls pause until a person allows them. Do not retry a refused call
 as-is: read the reason, tell the requester in plain words, and change course.
 Make such calls one at a time.
+
+## Files you must not change
+
+Never edit, delete or recreate the lockfile (`uv.lock`,
+`package-lock.json`), the package name in `pyproject.toml` or
+`package.json`, the `Dockerfile`, the `Makefile` or `.gitlab-ci.yml`. You
+cannot regenerate a lockfile, and the build and checks depend on all of
+them. If one of them was changed and the build or checks now fail (for
+example "The lockfile needs to be updated" or "Missing workspace member"),
+put it back with `gitlab_restore_from_template` (e.g. `paths: ["uv.lock",
+"pyproject.toml"]`), then run the checks again. Never work around such an
+error by removing the lockfile or changing the build steps.
 
 ## Keeping data
 

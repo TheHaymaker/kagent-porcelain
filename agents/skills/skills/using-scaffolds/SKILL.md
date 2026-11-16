@@ -40,10 +40,9 @@ mkdir -p /data/workspace && cp -r "$WORKBENCH_SCAFFOLDS_DIR/$SCAFFOLD" "/data/wo
 cd "/data/workspace/$APP"
 # Replace the placeholder name in exactly the files scaffold.yaml lists under
 # rename.files (here for python-fastapi-cloudrun):
-sed -i "s/workbench-app/$APP/g" pyproject.toml app/main.py app/templates/base.html README.md
-# The lockfile records the project name; refresh it (dependencies do not change):
-uv lock                                   # Python scaffolds
-# npm install --package-lock-only         # node-react-cloudrun
+sed -i "s/workbench-app/$APP/g" app/main.py app/templates/base.html README.md
+# The package name in pyproject.toml / package.json stays workbench-app: the
+# lockfile records it, so renaming it would mean regenerating the lockfile.
 make test          # must pass before you change anything
 git init -b main && git add -A && git commit -m "Start $APP from $SCAFFOLD"
 ```
