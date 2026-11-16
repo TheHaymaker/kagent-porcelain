@@ -21,6 +21,7 @@
 #   up.sh tools      builds repo, buckets, service accounts and the builder's
 #                    tool servers (needs gitlab-setup)
 #   up.sh builder    the Gemini builder agent (needs model and tools)
+#   up.sh web-check  diagnose web sign-in: the /__/ handler proxy (read-only)
 #   up.sh all        every phase in order
 #   up.sh status     what is running
 #   up.sh down       delete the cluster (the registry and images stay)
@@ -912,6 +913,30 @@ phase_builder() {
   [[ -n $EXPOSED ]] && echo "The builder is the web app's default agent at https://$EXPOSE_HOST (after the next workbench or expose run)."
 }
 
+# phase_web_check fetches the sign-in handler's pages through the web
+# service (as the browser would, via nginx's /__/ proxy) and directly from
+# Google, and shows nginx's recent errors. Read-only.
+phase_web_check() {
+  kubeconfig
+  local up="https://${PROJECT_ID}.firebaseapp.com"
+  say "Sign-in handler through workbench-web and directly"
+  kubectl -n "$NAMESPACE" run web-check --rm -i --restart=Never --quiet \
+    --image=curlimages/curl:8.11.1 --command -- sh -c '
+      for base in "http://workbench-web" "'"$up"'"; do
+        for p in /__/auth/handler /__/auth/iframe /__/auth/iframe.js /__/firebase/init.json; do
+          printf "%-45s " "$base$p"
+          curl -s -o /tmp/b -D /tmp/h -w "%{http_code} %{content_type} %{size_download}B\n" "$base$p"
+          grep -iE "^(x-frame-options|content-security-policy|location):" /tmp/h | sed "s/^/    /"
+          case "$p" in *init.json) head -c 300 /tmp/b | sed "s/^/    /"; echo;; esac
+        done
+      done' || true
+  say "workbench-web nginx errors (last 30)"
+  kubectl -n "$NAMESPACE" logs -l app.kubernetes.io/name=workbench-web --tail=200 2>&1 |
+    grep -iE "error|warn|/__/" | tail -30 || true
+  kubectl -n "$NAMESPACE" get configmap workbench-web-config -o jsonpath='{.data.config\.json}' |
+    python3 -c 'import json,sys; c=json.load(sys.stdin); ip=c.get("identityPlatform",{}); print("config: authProvider=%s authDomain=%s projectId=%s" % (c.get("authProvider"), ip.get("authDomain"), ip.get("projectId")))'
+}
+
 phase_status() {
   kubeconfig
   kubectl -n "$NAMESPACE" get pods,svc
@@ -936,10 +961,11 @@ case ${1:-} in
   gitlab-setup) phase_gitlab_setup ;;
   tools) phase_check; phase_tools ;;
   builder) phase_check; phase_builder ;;
+  web-check) phase_web_check ;;
   expose) phase_check; phase_expose ;;
   unexpose) phase_check; phase_unexpose ;;
   all) phase_check; phase_infra; phase_images; phase_kagent; phase_workbench; phase_smoke ;;
   status) phase_status ;;
   down) phase_down ;;
-  *) sed -n '2,35p' "$0"; exit 2 ;;
+  *) sed -n '2,36p' "$0"; exit 2 ;;
 esac
