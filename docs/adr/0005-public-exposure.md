@@ -61,3 +61,20 @@ does.
 Enable Identity Platform, add the Google provider (this creates its OAuth
 client), and add the public hostname to its authorized domains. Everything
 else is `deploy/gcp/up.sh expose`.
+
+## Amendment (16 Nov 2026): Google Identity Services, and IAP for previews
+
+- **Sign-in uses Google Identity Services**, not the Identity Platform SDK.
+  The SDK's popup flow lost its result on mobile browsers (the handler's
+  storage is partitioned as a third-party site), and its redirect flow never
+  completed on Edge for Android even with the handler proxied on
+  Workbench's own host. Google's "Sign in with Google" button gives the page
+  a Google ID token directly; the server trusts `https://accounts.google.com`
+  for the web app's OAuth client ID, with roles by verified email as before.
+  The Identity Platform path remains in the code for when it is wanted.
+- **Previews are not public; they sit behind IAP.** Cloud Run services are
+  deployed with IAP on. The requester is granted
+  `roles/iap.httpsResourceAccessor` at deploy; others only through the
+  approval-gated `cloudrun_share_preview`. Without a Workspace organization,
+  IAP uses the web app's OAuth client (its secret is a deploy secret), whose
+  redirect URIs include IAP's `…/clientIds/<id>:handleRedirect`.

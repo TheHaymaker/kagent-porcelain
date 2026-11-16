@@ -37,7 +37,38 @@ and why:
 - The plain Gemini API (AI Studio) is not used: it bills from prepaid
   credits, which this project has used up.
 
-GitLab and Cloud Run have not been exercised yet.
+### A real app, end to end (16 Nov 2026)
+
+A requester signed in at the public address and asked the Gemini builder
+for "a cat themed todo app". The builder created
+`thehaymaker-workbench/apps/cat-todo-app` from the FastAPI template, edited
+it through the GitLab tools, built its image with Cloud Build (build-mcp),
+and, after the requester approved the deploy card in Workbench, deployed
+`wb-preview-cat-todo-app` to Cloud Run. With IAP on, the requester opened
+the test version's link on a phone, signed in with Google and used the app.
+
+What it took, in order:
+
+- **Public Workbench** (ADR 0005): Ingress, managed certificate, Cloud Armor
+  allowlist; sign-in with Google Identity Services ("Sign in with Google").
+  The Identity Platform popup and redirect flows failed on mobile browsers
+  (cross-site handler storage) and were replaced.
+- **GitLab**: a private group with `apps` and `templates`, the three
+  scaffolds published as templates (`up.sh gitlab-setup`), and gitlab-mcp
+  with read tools so a builder without a shell can read before it writes.
+- **Builds**: build-mcp turns a project's commit into a digest-pinned image
+  in the builds repository with Cloud Build (in place of GitLab CI).
+- **Previews**: cloudrun-mcp deploys with IAP on and grants the requester
+  (from `workbench_get_requester`) access; `cloudrun_share_preview` adds
+  others behind an approval. IAP uses the web app's OAuth client, since the
+  project has no Workspace organization.
+- **Conversation**: approvals now appear in the chat even when a resumed
+  task's stream does not report the pause, sit where they happened, and are
+  titled in plain words; read-only Cloud Run calls need no approval.
+
+Known rough edges: the builder's progress card (`workbench_show`) is often
+rejected, and Gemini's prose sometimes needs the tightened failure rules in
+`deploy/agents/builder-gemini.md`.
 
 ## Requirements
 
@@ -69,16 +100,17 @@ GitLab and Cloud Run have not been exercised yet.
 
 ## Not yet done, in order of importance
 
-1. **A real app end to end.** The cluster, kagent, the approval loop and a
-   real model are proven (above); next is GitLab and a scaffold taken from
-   request to a Cloud Run preview with the Cloud Run deployer, using the
-   builder agent pack on `workbench-gemini`.
-2. **The A2UI DataPart spike.** Does kagent pass an agent's DataParts through
+1. **The agent roster** (Concierge, Discovery/Definition, Planner, builder
+   with Tester, Verifier and Code reviewer subagents); not started.
+2. **Preview panel inside Workbench** through a preview proxy on its own
+   origin; designed, not started.
+3. **Fix the builder's progress cards** (`workbench_show` rejections).
+4. **The A2UI DataPart spike.** Does kagent pass an agent's DataParts through
    intact? The tool-result carrier works either way.
-3. **Approval proof for preview-level always-ask tools** (ADR 0002 known gap).
-4. **Gateway usage reporter.** LiteLLM callback → `POST /hooks/usage`, signed.
-5. **Teams bot receiver** for `notify.Webhook`, and then the bot itself.
-6. **Open PRD questions** still decide configuration: the directory (Entra or
+5. **Approval proof for preview-level always-ask tools** (ADR 0002 known gap).
+6. **Gateway usage reporter.** LiteLLM callback → `POST /hooks/usage`, signed.
+7. **Teams bot receiver** for `notify.Webhook`, and then the bot itself.
+8. **Open PRD questions** still decide configuration: the directory (Entra or
    Workspace), who approves production (the approver group), and the first
    three apps (which shape the scaffolds).
 
