@@ -200,6 +200,7 @@ spec:
             - {name: CLOUDRUN_MAX_INSTANCES, value: "2"}
             - {name: CLOUDRUN_ALLOW_PUBLIC_INVOKER, value: "false"}
             - {name: CLOUDRUN_DEPLOY_WAIT, value: "3m"}
+            - {name: CLOUDRUN_IAP, value: "true"}
           readinessProbe:
             httpGet: {path: /healthz, port: http}
           resources:

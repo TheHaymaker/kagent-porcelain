@@ -183,7 +183,8 @@ func assertPreviewOnly(t *testing.T, f *fakeGCP) {
 			}
 			continue
 		}
-		if !strings.HasPrefix(r.Path, "/v2/"+parent+"/") {
+		iapParent := "/v1/projects/" + previewProject + "/iap_web/cloud_run-" + region + "/services/"
+		if !strings.HasPrefix(r.Path, "/v2/"+parent+"/") && !strings.HasPrefix(r.Path, iapParent) {
 			t.Errorf("request outside preview project: %s %s", r.Method, r.Path)
 		}
 		if strings.Contains(r.Path+r.Query, prodProject) {
@@ -202,6 +203,7 @@ func TestToolsAndAnnotations(t *testing.T) {
 		"cloudrun_read_logs":              {ReadOnly: true, Destructive: false, Idempotent: true, OpenWorld: false},
 		"cloudrun_delete_preview_service": {ReadOnly: false, Destructive: true, Idempotent: true, OpenWorld: false},
 		"cloudrun_set_iam_invoker":        {ReadOnly: false, Destructive: true, Idempotent: true, OpenWorld: false},
+		"cloudrun_share_preview":          {ReadOnly: false, Destructive: true, Idempotent: true, OpenWorld: false},
 	}
 	if len(tools) != len(want) {
 		t.Fatalf("got %d tools, want %d", len(tools), len(want))
@@ -465,4 +467,47 @@ func TestPublicInvokerWhenAllowed(t *testing.T) {
 	if !out.Changed {
 		t.Fatal("expected change")
 	}
+}
+
+func iapOn(c *Config) { c.IAP = true; c.IAPBaseURL = c.RunBaseURL }
+
+func TestDeployWithIAPGivesViewersAccess(t *testing.T) {
+	f, cs := setup(t, iapOn)
+	var out DeployOut
+	mcpxtest.MustOK(t, cs, "cloudrun_deploy_preview", map[string]any{
+		"service": "my-app", "image": imagePrefix + "my-app@sha256:" + strings.Repeat("a", 64),
+		"viewers": []string{"user:alice@example.com"},
+	}, &out)
+	if len(out.Viewers) != 1 {
+		t.Fatalf("viewers not granted: %+v", out)
+	}
+	patch, _ := f.find(http.MethodPatch, "/v2/projects/"+previewProject+"/locations/"+region+"/services/wb-preview-my-app")
+	if patch.Body["iapEnabled"] != true {
+		t.Fatalf("IAP not enabled on deploy: %+v", patch.Body)
+	}
+	set, _ := f.find(http.MethodPost, "/v1/projects/"+previewProject+"/iap_web/cloud_run-"+region+"/services/wb-preview-my-app:setIamPolicy")
+	b, _ := json.Marshal(set.Body)
+	if !strings.Contains(string(b), "roles/iap.httpsResourceAccessor") || !strings.Contains(string(b), "user:alice@example.com") {
+		t.Fatalf("IAP policy %s", b)
+	}
+}
+
+func TestSharePreview(t *testing.T) {
+	_, cs := setup(t, iapOn)
+	var out ShareOut
+	mcpxtest.MustOK(t, cs, "cloudrun_share_preview", map[string]any{"service": "my-app", "member": "group:team@example.com"}, &out)
+	if !out.Changed || len(out.Members) != 1 {
+		t.Fatalf("%+v", out)
+	}
+	for _, m := range []string{"allUsers", "allAuthenticatedUsers", "serviceAccount:x@" + previewProject + ".iam.gserviceaccount.com", "user:mallory@evil.test"} {
+		mcpxtest.MustErr(t, cs, "cloudrun_share_preview", map[string]any{"service": "my-app", "member": m}, "member")
+	}
+}
+
+func TestViewersNeedIAP(t *testing.T) {
+	_, cs := setup(t)
+	mcpxtest.MustErr(t, cs, "cloudrun_deploy_preview", map[string]any{
+		"service": "my-app", "image": imagePrefix + "my-app@sha256:" + strings.Repeat("a", 64), "viewers": []string{"user:alice@example.com"},
+	}, "IAP")
+	mcpxtest.MustErr(t, cs, "cloudrun_share_preview", map[string]any{"service": "my-app", "member": "user:alice@example.com"}, "IAP")
 }

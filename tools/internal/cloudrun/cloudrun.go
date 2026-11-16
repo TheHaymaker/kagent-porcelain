@@ -46,9 +46,14 @@ type Config struct {
 	// InvokerDomains, if set, restricts invoker members to these email domains
 	// (the preview project's service-account domain is always allowed).
 	InvokerDomains []string
-	// RunBaseURL and LoggingBaseURL default to the Google endpoints.
+	// IAP turns on Identity-Aware Proxy for preview services, so a person
+	// opens the URL in a browser after a Google sign-in and access is granted
+	// per person or group (cloudrun_share_preview).
+	IAP bool
+	// RunBaseURL, LoggingBaseURL and IAPBaseURL default to the Google endpoints.
 	RunBaseURL     string
 	LoggingBaseURL string
+	IAPBaseURL     string
 	// DeployWait bounds how long deploy waits for the rollout.
 	DeployWait time.Duration
 	// PollInterval between operation polls.
@@ -89,6 +94,10 @@ func (c *Config) Validate() error {
 	if c.PollInterval <= 0 {
 		c.PollInterval = 2 * time.Second
 	}
+	if c.IAPBaseURL == "" {
+		c.IAPBaseURL = "https://iap.googleapis.com"
+	}
+	c.IAPBaseURL = strings.TrimRight(c.IAPBaseURL, "/")
 	c.RunBaseURL = strings.TrimRight(c.RunBaseURL, "/")
 	c.LoggingBaseURL = strings.TrimRight(c.LoggingBaseURL, "/")
 	return nil
@@ -135,6 +144,14 @@ func (c *Client) run(ctx context.Context, method, path string, q url.Values, bod
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
+	_, err := httpx.Do(ctx, c.http, httpx.Request{Method: method, URL: u, Body: body}, out)
+	return err
+}
+
+// iap calls the IAP API on a preview service's IAP resource.
+func (c *Client) iap(ctx context.Context, method, name, verb string, body, out any) error {
+	u := c.cfg.IAPBaseURL + "/v1/projects/" + c.cfg.PreviewProject + "/iap_web/cloud_run-" + c.cfg.Region +
+		"/services/" + name + ":" + verb
 	_, err := httpx.Do(ctx, c.http, httpx.Request{Method: method, URL: u, Body: body}, out)
 	return err
 }

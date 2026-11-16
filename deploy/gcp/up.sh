@@ -897,6 +897,33 @@ phase_tools() {
     --member "$pool/artifactregistry-mcp" --role roles/artifactregistry.reader
   echo "  granted"
 
+  # Test versions open in a browser behind IAP (Google sign-in, access per
+  # person or group). IAP calls Cloud Run as its service agent; cloudrun-mcp
+  # grants access on each test version.
+  say "IAP for test versions"
+  gc services enable iap.googleapis.com >/dev/null
+  gcloud beta services identity create --service=iap.googleapis.com --project "$PROJECT_ID" >/dev/null 2>&1 || true
+  grant_project "serviceAccount:service-$number@gcp-sa-iap.iam.gserviceaccount.com" roles/run.invoker
+  grant_project "$pool/cloudrun-mcp" roles/iap.admin
+  # Without a Google Workspace organization, IAP needs its own OAuth client
+  # for personal Google accounts. The client secret comes from the deploy
+  # environment and is written only to a private temporary file.
+  if [[ -n ${IAP_OAUTH_CLIENT_SECRET:-} && -n ${WORKBENCH_GOOGLE_CLIENT_ID:-} ]]; then
+    [[ -n ${GITHUB_ACTIONS:-} ]] && echo "::add-mask::$IAP_OAUTH_CLIENT_SECRET"
+    local iapfile="$STATE/iap-settings.yaml"
+    (umask 077; printf 'access_settings:\n  oauth_settings:\n    client_id: %s\n    client_secret: %s\n' \
+      "$WORKBENCH_GOOGLE_CLIENT_ID" "$IAP_OAUTH_CLIENT_SECRET" > "$iapfile")
+    if gc iap settings set "$iapfile" --resource-type=iap_web >/dev/null 2>"$STATE/iap.err"; then
+      echo "  IAP uses the web app's OAuth client (personal Google accounts can sign in)"
+    else
+      grep -vi secret "$STATE/iap.err" >&2 || true
+      echo "  warning: could not set IAP's OAuth client; personal Google accounts may be refused" >&2
+    fi
+    rm -f "$iapfile" "$STATE/iap.err"
+  else
+    echo "  note: IAP_OAUTH_CLIENT_SECRET is not set; without a Workspace organization, IAP sign-in may fail"
+  fi
+
   say "Tool servers"
   kubectl create namespace workbench-tools --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl -n workbench-tools create secret generic gitlab-mcp-token --from-literal=token="$GITLAB_TOKEN" \

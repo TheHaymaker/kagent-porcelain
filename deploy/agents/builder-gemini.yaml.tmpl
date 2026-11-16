@@ -35,7 +35,7 @@ spec:
         tools: [cloudrun_get_service, cloudrun_list_revisions, cloudrun_read_logs]
     - mcp:
         server: {kind: RemoteMCPServer, name: cloudrun-mcp}
-        tools: [cloudrun_deploy_preview, cloudrun_delete_preview_service, cloudrun_set_iam_invoker]
+        tools: [cloudrun_deploy_preview, cloudrun_delete_preview_service, cloudrun_set_iam_invoker, cloudrun_share_preview]
         requireApproval: true
 ---
 apiVersion: api.kagent.dev/v1alpha3

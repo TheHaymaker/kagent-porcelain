@@ -27,13 +27,14 @@ func main() {
 	maxInst := config.Int64(fs, "max-instances", "CLOUDRUN_MAX_INSTANCES", 2, "cap on max instances per preview service")
 	public := config.Bool(fs, "allow-public-invoker", "CLOUDRUN_ALLOW_PUBLIC_INVOKER", false, "allow allUsers/allAuthenticatedUsers invoker grants")
 	domains := config.String(fs, "invoker-domains", "CLOUDRUN_INVOKER_DOMAINS", "", "comma-separated email domains allowed as invokers (empty: any)")
+	iap := config.Bool(fs, "iap", "CLOUDRUN_IAP", false, "turn on Identity-Aware Proxy for preview services (browser access after Google sign-in)")
 	wait := config.Duration(fs, "deploy-wait", "CLOUDRUN_DEPLOY_WAIT", 3*time.Minute, "how long deploy waits for a rollout")
 	_ = fs.Parse(os.Args[1:])
 
 	cfg := cloudrun.Config{
 		PreviewProject: *project, Region: *region, ProductionProjects: config.List(*prod),
 		ImagePrefix: *imagePrefix, RuntimeServiceAccount: *runtimeSA, MaxInstances: int(*maxInst),
-		AllowPublicInvoker: *public, InvokerDomains: config.List(*domains), DeployWait: *wait,
+		AllowPublicInvoker: *public, InvokerDomains: config.List(*domains), DeployWait: *wait, IAP: *iap,
 	}
 	if err := cfg.Validate(); err != nil {
 		app.Fatal(name, err)

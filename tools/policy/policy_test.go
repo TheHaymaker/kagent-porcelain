@@ -86,6 +86,7 @@ func TestClassify(t *testing.T) {
 		{"bigquery_delete_table", nil, []policy.Class{policy.DataDeletion}},
 		{"cloudrun_delete_preview_service", nil, []policy.Class{policy.DataDeletion}},
 		{"cloudrun_set_iam_invoker", nil, []policy.Class{policy.IAMChange}},
+		{"cloudrun_share_preview", nil, []policy.Class{policy.IAMChange}},
 		{"bigquery_create_dataset", nil, []policy.Class{policy.NewSpend}},
 		{"cloudrun_deploy_preview", map[string]any{"allow_create": true}, []policy.Class{policy.NewSpend}},
 		{"cloudrun_deploy_preview", map[string]any{"image": "x"}, nil},

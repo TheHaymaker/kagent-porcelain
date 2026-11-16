@@ -3,6 +3,7 @@ package cloudrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -42,7 +43,7 @@ const (
 const Instructions = `Cloud Run tools for Workbench PREVIEW environments only. Services are always named "wb-preview-<name>" in the preview project; you cannot target another project.
 There is no production deploy: production is reached only through Workbench's approval-gated promotion.
 Deploy with an image digest from artifactregistry_get_digest. Creating a new preview service requires allow_create=true (it adds spend and needs approval).
-Preview services require authentication; use cloudrun_set_iam_invoker to let specific people open them.`
+Preview services require authentication. With IAP on, people open the URL in a browser after a Google sign-in: pass the requester as a viewer when deploying (viewers: ["user:<email>"]) and use cloudrun_share_preview to add others.`
 
 // Register adds all Cloud Run tools to s.
 func Register(s *mcpx.Server, c *Client) {
@@ -80,6 +81,11 @@ func Register(s *mcpx.Server, c *Client) {
 			"(user:, group:, serviceAccount: or domain:). IAM change; approval-gated.",
 		Annotations: mcpx.Mutating("Change Cloud Run preview invoker", true, true, false),
 	}, c.setIAMInvoker)
+	mcpx.AddTool(s, &mcp.Tool{
+		Name:        "cloudrun_share_preview",
+		Description: "Give a person, group or domain access to open a preview in a browser (they sign in with Google first; IAP), or remove it. Never public.",
+		Annotations: mcpx.Mutating("Share test version", true, true, false),
+	}, c.sharePreview)
 }
 
 // ---- deploy ----
@@ -94,6 +100,7 @@ type DeployIn struct {
 	CPU          string            `json:"cpu,omitempty" jsonschema:"1 (default) or 2"`
 	MaxInstances int               `json:"max_instances,omitempty" jsonschema:"upper bound on instances; capped by server policy"`
 	AllowCreate  bool              `json:"allow_create,omitempty" jsonschema:"must be true to create a service that does not exist yet (new spend; approval-gated)"`
+	Viewers      []string          `json:"viewers,omitempty" jsonschema:"people or groups who may open the test version in a browser, e.g. user:alice@example.com; give at least the requester (workbench_get_requester)"`
 	Wait         *bool             `json:"wait,omitempty" jsonschema:"wait for the rollout to finish (default true)"`
 }
 
@@ -106,6 +113,7 @@ type DeployOut struct {
 	Done      bool     `json:"done" jsonschema:"false if the rollout is still in progress; poll cloudrun_get_service"`
 	Operation string   `json:"operation,omitempty"`
 	Status    *Service `json:"status,omitempty"`
+	Viewers   []string `json:"viewers,omitempty" jsonschema:"members given browser access by this call"`
 }
 
 var (
@@ -116,6 +124,17 @@ var (
 )
 
 func (c *Client) validateDeploy(in *DeployIn) (string, error) {
+	if len(in.Viewers) > 0 && !c.cfg.IAP {
+		return "", validate.Errorf("viewers", "browser access needs IAP, which is not enabled on this server")
+	}
+	if len(in.Viewers) > 10 {
+		return "", validate.Errorf("viewers", "at most 10; share with a group instead")
+	}
+	for _, m := range in.Viewers {
+		if err := c.checkViewer(m); err != nil {
+			return "", err
+		}
+	}
 	name, err := ServiceName(in.Service)
 	if err != nil {
 		return "", err
@@ -195,11 +214,15 @@ func (c *Client) serviceBody(in DeployIn, requester string) map[string]any {
 	if c.cfg.RuntimeServiceAccount != "" {
 		tmpl["serviceAccount"] = c.cfg.RuntimeServiceAccount
 	}
-	return map[string]any{
+	body := map[string]any{
 		"labels":   labels,
-		"ingress":  "INGRESS_TRAFFIC_ALL", // reachable, but IAM-authenticated
+		"ingress":  "INGRESS_TRAFFIC_ALL", // reachable, but authenticated (IAM, or IAP sign-in)
 		"template": tmpl,
 	}
+	if c.cfg.IAP {
+		body["iapEnabled"] = true
+	}
+	return body
 }
 
 func (c *Client) deployPreview(ctx context.Context, call mcpx.Call, in DeployIn) (DeployOut, error) {
@@ -244,6 +267,12 @@ func (c *Client) deployPreview(ctx context.Context, call mcpx.Call, in DeployIn)
 	}
 	if st, err := c.fetchService(ctx, name); err == nil {
 		out.Status = &st
+	}
+	for _, m := range in.Viewers {
+		if _, err := c.editIAPAccess(ctx, name, m, "add"); err != nil {
+			return out, fmt.Errorf("deployed, but could not give %s access: %w", m, err)
+		}
+		out.Viewers = append(out.Viewers, m)
 	}
 	return out, nil
 }
@@ -671,6 +700,112 @@ func (c *Client) setIAMInvoker(ctx context.Context, _ mcpx.Call, in SetInvokerIn
 	out.Members = []string{}
 	for _, b := range pol.Bindings {
 		if b.Role == InvokerRole && len(b.Condition) == 0 {
+			out.Members = append(out.Members, b.Members...)
+		}
+	}
+	return out, nil
+}
+
+// ---- IAP access ----
+
+// IAPAccessorRole lets a member through IAP to a preview service.
+const IAPAccessorRole = "roles/iap.httpsResourceAccessor"
+
+// checkViewer allows people, groups and domains; never public access.
+func (c *Client) checkViewer(m string) error {
+	if m == "allUsers" || m == "allAuthenticatedUsers" || strings.HasPrefix(m, "serviceAccount:") {
+		return validate.Errorf("member", "%q cannot be given browser access; name people (user:), groups (group:) or a domain (domain:)", validate.Clip(m, 80))
+	}
+	return c.checkMember(m)
+}
+
+// ShareIn are the arguments of cloudrun_share_preview.
+type ShareIn struct {
+	Service string `json:"service" jsonschema:"preview service name"`
+	Member  string `json:"member" jsonschema:"who may open it in a browser: user:alice@example.com, group:team@example.com or domain:example.com"`
+	Action  string `json:"action,omitempty" jsonschema:"add (default) or remove"`
+}
+
+// ShareOut is the result of cloudrun_share_preview.
+type ShareOut struct {
+	Service string   `json:"service"`
+	Changed bool     `json:"changed" jsonschema:"false if the member already had (or lacked) access"`
+	Members []string `json:"members" jsonschema:"everyone who may open the test version after the change"`
+}
+
+func (c *Client) sharePreview(ctx context.Context, _ mcpx.Call, in ShareIn) (ShareOut, error) {
+	if !c.cfg.IAP {
+		return ShareOut{}, errors.New("browser access needs IAP, which is not enabled on this server")
+	}
+	name, err := ServiceName(in.Service)
+	if err != nil {
+		return ShareOut{}, err
+	}
+	action := in.Action
+	if action == "" {
+		action = "add"
+	}
+	if action != "add" && action != "remove" {
+		return ShareOut{}, validate.Errorf("action", "must be add or remove")
+	}
+	if err := c.checkViewer(in.Member); err != nil {
+		return ShareOut{}, err
+	}
+	var svc apiService
+	if err := c.run(ctx, http.MethodGet, c.servicePath(name), nil, nil, &svc); err != nil {
+		if httpx.IsNotFound(err) {
+			return ShareOut{}, fmt.Errorf("preview service %s not found", name)
+		}
+		return ShareOut{}, err
+	}
+	if svc.Labels[LabelManaged] != "true" {
+		return ShareOut{}, fmt.Errorf("service %s is not managed by Workbench; refusing to change its access", name)
+	}
+	return c.editIAPAccess(ctx, name, in.Member, action)
+}
+
+// editIAPAccess adds or removes member's IAP accessor role on a service,
+// round-tripping the policy with its etag.
+func (c *Client) editIAPAccess(ctx context.Context, name, member, action string) (ShareOut, error) {
+	var pol iamPolicy
+	if err := c.iap(ctx, http.MethodPost, name, "getIamPolicy", map[string]any{"options": map[string]any{"requestedPolicyVersion": 3}}, &pol); err != nil {
+		return ShareOut{}, err
+	}
+	idx := -1
+	for i, b := range pol.Bindings {
+		if b.Role == IAPAccessorRole && len(b.Condition) == 0 {
+			idx = i
+			break
+		}
+	}
+	has := idx >= 0 && slices.Contains(pol.Bindings[idx].Members, member)
+	out := ShareOut{Service: name}
+	switch {
+	case action == "add" && !has:
+		if idx < 0 {
+			pol.Bindings = append(pol.Bindings, iamBinding{Role: IAPAccessorRole})
+			idx = len(pol.Bindings) - 1
+		}
+		pol.Bindings[idx].Members = append(pol.Bindings[idx].Members, member)
+		out.Changed = true
+	case action == "remove" && has:
+		pol.Bindings[idx].Members = slices.DeleteFunc(pol.Bindings[idx].Members, func(m string) bool { return m == member })
+		if len(pol.Bindings[idx].Members) == 0 {
+			pol.Bindings = slices.Delete(pol.Bindings, idx, idx+1)
+		}
+		out.Changed = true
+	}
+	if out.Changed {
+		pol.Version = 3
+		var updated iamPolicy
+		if err := c.iap(ctx, http.MethodPost, name, "setIamPolicy", map[string]any{"policy": pol}, &updated); err != nil {
+			return ShareOut{}, err
+		}
+		pol = updated
+	}
+	out.Members = []string{}
+	for _, b := range pol.Bindings {
+		if b.Role == IAPAccessorRole && len(b.Condition) == 0 {
 			out.Members = append(out.Members, b.Members...)
 		}
 	}

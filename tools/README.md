@@ -41,7 +41,8 @@ annotations match the classes.
 | Class | Pattern | Tools |
 | --- | --- | --- |
 | Data deletion | `*_delete_*` | `cloudrun_delete_preview_service`, `bigquery_delete_table` |
-| IAM change | `*_iam_*` | `cloudrun_set_iam_invoker` |
+| IAM change | `*_iam_*` | `cloudrun_share_preview` | give or remove one person, group or domain browser access to a preview through IAP (`roles/iap.httpsResourceAccessor`); never public | no | yes | yes | no | **IAM change** |
+| `cloudrun_set_iam_invoker` |
 | New spend | `*_create_dataset` | `bigquery_create_dataset` |
 | New spend (conditional) | `cloudrun_deploy_preview` with `allow_create: true` | `cloudrun_deploy_preview` |
 
@@ -199,6 +200,7 @@ does not rely on tool arguments:
 | `-max-instances` | `CLOUDRUN_MAX_INSTANCES` | `2` | cap |
 | `-allow-public-invoker` | `CLOUDRUN_ALLOW_PUBLIC_INVOKER` | `false` | |
 | `-invoker-domains` | `CLOUDRUN_INVOKER_DOMAINS` | – | comma list |
+| `-iap` | `CLOUDRUN_IAP` | `false` | deploy previews with IAP on; `viewers` on deploy and `cloudrun_share_preview` grant browser access |
 | `-deploy-wait` | `CLOUDRUN_DEPLOY_WAIT` | `3m` | keep below the RemoteMCPServer `timeout` |
 
 ## artifactregistry-mcp (read-only)

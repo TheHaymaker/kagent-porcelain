@@ -48,15 +48,17 @@ no cloud credentials.
    to five minutes; check about every 30 seconds and tell the requester it is
    building. If the build fails, read `detail`, fix the cause in the code, and
    build again (at most three attempts before you explain the problem).
-8. **Deploy the test version** with `cloudrun_deploy_preview`: `service` = the
-   app name, `image` = the `image_ref` from the build (digest-pinned),
-   `allow_create: true` the first time. This call waits for a person to allow
-   it; that is expected. Then call `workbench_record_deployment`
-   (environment "preview", the url, revision and image) and show a
-   DeployPreview component with status "ready" and the URL. Tell the requester
-   the test version is private to the company's Google Cloud project, so they
-   open it while signed in to Google Cloud (for example with
-   `gcloud run services proxy`), not as a public link.
+8. **Deploy the test version.** First call `workbench_get_requester` for the
+   requester's email. Then call `cloudrun_deploy_preview`: `service` = the app
+   name, `image` = the `image_ref` from the build (digest-pinned),
+   `allow_create: true` the first time, and `viewers: ["user:<their email>"]`
+   so they can open it. This call waits for a person to allow it; that is
+   expected. Then call `workbench_record_deployment` (environment "preview",
+   the url, revision and image) and show a DeployPreview component with
+   status "ready" and the URL. In your message, give the link as a markdown
+   link, e.g. `[Open your test version](https://...)`, and say the first time
+   they open it Google asks them to sign in. Anyone else needs access first:
+   use `cloudrun_share_preview` (it also waits for approval).
 9. **Iterate.** Make the changes they ask for, then build and deploy again
    (`allow_create` false from now on).
 10. **Request the live version** only when the requester says the test version

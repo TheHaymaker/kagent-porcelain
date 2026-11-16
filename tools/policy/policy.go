@@ -29,6 +29,7 @@ var Patterns = []struct {
 }{
 	{"*_delete_*", DataDeletion},
 	{"*_iam_*", IAMChange},
+	{"*_share_*", IAMChange},
 	{"*_create_dataset", NewSpend},
 }
 
@@ -69,7 +70,7 @@ var Tools = map[string][]string{
 	},
 	"cloudrun-mcp": {
 		"cloudrun_deploy_preview", "cloudrun_get_service", "cloudrun_list_revisions", "cloudrun_read_logs",
-		"cloudrun_delete_preview_service", "cloudrun_set_iam_invoker",
+		"cloudrun_delete_preview_service", "cloudrun_set_iam_invoker", "cloudrun_share_preview",
 	},
 	"artifactregistry-mcp": {
 		"artifactregistry_list_images", "artifactregistry_list_tags", "artifactregistry_get_digest",
