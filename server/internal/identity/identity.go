@@ -185,7 +185,8 @@ func (a *Authenticator) Authenticate(ctx context.Context, h http.Header, _ url.V
 	}
 	p, err := a.verifyExternal(ctx, raw, h.Get(SurfaceHeader))
 	if err != nil {
-		a.log.DebugContext(ctx, "token rejected", "error", err)
+		// The reason names the check that failed and the issuer, never the token.
+		a.log.WarnContext(ctx, "token rejected", "error", err)
 		if errors.Is(err, ErrNotLinked) {
 			return nil, err
 		}

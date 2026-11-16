@@ -956,6 +956,9 @@ phase_web_check() {
   say "workbench-web nginx errors (last 30; access lines are never printed)"
   kubectl -n "$NAMESPACE" logs -l app.kubernetes.io/name=workbench-web --tail=200 2>&1 |
     grep -E "\[(error|warn|crit)\]" | tail -30 || true
+  say "Rejected sign-in tokens (last 15; reasons only)"
+  kubectl -n "$NAMESPACE" logs deploy/kagent-controller --all-containers --since=2h 2>&1 |
+    grep '"token rejected"' | sed -E 's/"(email|sub|ip|remote_addr)":"[^"]*"/"\1":"…"/g' | tail -15 || true
   kubectl -n "$NAMESPACE" get configmap workbench-web-config -o jsonpath='{.data.config\.json}' |
     python3 -c 'import json,sys; c=json.load(sys.stdin); ip=c.get("identityPlatform",{}); print("config: authProvider=%s authDomain=%s projectId=%s" % (c.get("authProvider"), ip.get("authDomain"), ip.get("projectId")))'
 }
