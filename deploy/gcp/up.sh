@@ -23,6 +23,7 @@
 #                    tool servers (needs gitlab-setup)
 #   up.sh builder    the Gemini builder agent (needs model and tools)
 #   up.sh web-check  diagnose web sign-in: the /__/ handler proxy (read-only)
+#   up.sh tools-check  tool servers' recent failed calls, preview services (read-only)
 #   up.sh all        every phase in order
 #   up.sh status     what is running
 #   up.sh down       delete the cluster (the registry and images stay)
@@ -963,6 +964,29 @@ phase_web_check() {
     python3 -c 'import json,sys; c=json.load(sys.stdin); ip=c.get("identityPlatform",{}); print("config: authProvider=%s authDomain=%s projectId=%s" % (c.get("authProvider"), ip.get("authDomain"), ip.get("projectId")))'
 }
 
+# phase_tools_check shows the tool servers' recent failed calls (their
+# tool_call audit lines, already redacted) and the preview services' state.
+# Read-only.
+phase_tools_check() {
+  kubeconfig
+  local d
+  for d in cloudrun-mcp build-mcp gitlab-mcp artifactregistry-mcp; do
+    say "$d: failed calls in the last 3 hours (newest last)"
+    kubectl -n workbench-tools logs "deploy/$d" --since=3h 2>&1 |
+      grep '"outcome":"error"' | python3 -c '
+import json, sys
+for line in sys.stdin:
+    try:
+        e = json.loads(line)
+    except ValueError:
+        continue
+    print("  %s %s: %s" % (e.get("time", "")[11:19], e.get("tool"), e.get("error", "")[:600]))
+' | tail -12 || true
+  done
+  say "Preview services"
+  gc run services list --region "$REGION" --format 'table(metadata.name,status.conditions[0].status,status.conditions[0].message)' 2>&1 | head -20 || true
+}
+
 phase_status() {
   kubeconfig
   kubectl -n "$NAMESPACE" get pods,svc
@@ -988,10 +1012,11 @@ case ${1:-} in
   tools) phase_check; phase_tools ;;
   builder) phase_check; phase_builder ;;
   web-check) phase_web_check ;;
+  tools-check) phase_check >/dev/null; phase_tools_check ;;
   expose) phase_check; phase_expose ;;
   unexpose) phase_check; phase_unexpose ;;
   all) phase_check; phase_infra; phase_images; phase_kagent; phase_workbench; phase_smoke ;;
   status) phase_status ;;
   down) phase_down ;;
-  *) sed -n '2,36p' "$0"; exit 2 ;;
+  *) sed -n '2,37p' "$0"; exit 2 ;;
 esac
