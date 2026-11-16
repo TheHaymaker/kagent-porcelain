@@ -231,11 +231,13 @@ The source is fetched through the same GitLab client as gitlab-mcp, so only
 projects in the allowed group can be built; the tree at one commit is uploaded
 to a staging bucket and built as a plain `docker build` of the repository
 root, as a dedicated service account, into the builds repository only.
+Reading build logs needs `roles/logging.viewer` for the server's own identity.
 
 | Tool | Does | readOnly | destructive | idempotent | openWorld | Always-ask |
 | --- | --- | --- | --- | --- | --- | --- |
 | `build_start_image` | resolve ref → commit, upload the tree, start the build; returns `build_id` and the `<repo>/<project>:<commit12>` tag | no | no | no | no | no |
-| `build_get_status` | status of a Workbench build (tagged `workbench`; others are refused); on SUCCESS the digest-pinned `image_ref` for `cloudrun_deploy_preview` | yes | no | yes | no | no |
+| `build_run_checks` | the project's CI checks at a commit, one Cloud Build step each: `uv sync`, `ruff check`, `ruff format --check`, `pytest` for a uv project; `npm ci`, `npm run check`, `npm test` for an npm project; no image | no | no | no | no | no |
+| `build_get_status` | status of a Workbench build (tagged `workbench`; others are refused); on an image build's SUCCESS the digest-pinned `image_ref` for `cloudrun_deploy_preview`; for a finished check run or any failure, `output` (the end of the log, from Cloud Logging) and `failed_step` | yes | no | yes | no | no |
 
 | Flag | Env | Default |
 | --- | --- | --- |

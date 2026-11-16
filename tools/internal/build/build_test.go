@@ -1,6 +1,9 @@
 package build
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,9 +30,27 @@ const (
 
 var digest = "sha256:" + strings.Repeat("c", 64)
 
-type fakeSource struct{}
+func tgz(t *testing.T, files ...string) []byte {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	for _, f := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: f, Mode: 0o644, Size: 1, Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = tw.Write([]byte("x"))
+	}
+	_ = tw.Close()
+	_ = zw.Close()
+	return buf.Bytes()
+}
 
-func (fakeSource) Source(_ context.Context, project, ref string) (gitlab.Snapshot, error) {
+type fakeSource struct{ trees map[string][]byte }
+
+func (f fakeSource) Source(_ context.Context, project, ref string) (gitlab.Snapshot, error) {
+	if tree, ok := f.trees[project]; ok {
+		return gitlab.Snapshot{Project: "wb/apps/" + project, Name: project, SHA: sha, Tarball: tree}, nil
+	}
 	if project != "expense-tracker" {
 		return gitlab.Snapshot{}, errors.New(`project "` + project + `" is outside the Workbench group`)
 	}
@@ -42,6 +63,9 @@ type fakeGCP struct {
 	created  map[string]any
 	status   string
 	tags     []string
+	steps    []map[string]any
+	logs     []string // newest first, as entries:list returns them
+	logQuery map[string]any
 }
 
 func (f *fakeGCP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -57,9 +81,16 @@ func (f *fakeGCP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"build": map[string]any{"id": buildID, "logUrl": "https://console/logs"}}})
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/projects/wb-builds/builds/"+buildID:
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": buildID, "status": f.status, "statusDetail": "step 0 failed", "tags": f.tags,
+			"id": buildID, "status": f.status, "statusDetail": "step 0 failed", "tags": f.tags, "steps": f.steps,
 			"results": map[string]any{"images": []map[string]any{{"name": prefix + "expense-tracker:0123456789ab", "digest": digest}}},
 		})
+	case r.Method == http.MethodPost && r.URL.Path == "/v2/entries:list":
+		_ = json.NewDecoder(r.Body).Decode(&f.logQuery)
+		var entries []map[string]any
+		for _, l := range f.logs {
+			entries = append(entries, map[string]any{"textPayload": l})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"entries": entries})
 	default:
 		w.WriteHeader(404)
 	}
@@ -70,12 +101,17 @@ func setup(t *testing.T) (*fakeGCP, *mcp.ClientSession) {
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	cfg := Config{Project: "wb-builds", Location: "us-central1", Repository: "builds", Bucket: "wb-staging",
-		ServiceAccount: "builds@wb-builds.iam.gserviceaccount.com", CloudBuildURL: srv.URL, StorageURL: srv.URL}
+		ServiceAccount: "builds@wb-builds.iam.gserviceaccount.com", CloudBuildURL: srv.URL, StorageURL: srv.URL, LoggingURL: srv.URL}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	s := mcpx.NewServer(mcpx.Options{Name: "build-mcp", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
-	Register(s, NewClient(cfg, fakeSource{}, srv.Client()))
+	src := fakeSource{trees: map[string][]byte{
+		"py-app":   tgz(t, "uv.lock", "pyproject.toml", "app/main.py"),
+		"node-app": tgz(t, "package-lock.json", "package.json"),
+		"bare-app": tgz(t, "README.md", "sub/uv.lock"),
+	}}
+	Register(s, NewClient(cfg, src, srv.Client()))
 	return f, mcpxtest.Connect(t, s, "alice")
 }
 
@@ -117,10 +153,57 @@ func TestStatusReportsFailureAndRefusesForeignBuilds(t *testing.T) {
 	f.status = "FAILURE"
 	var out StatusOut
 	mcpxtest.MustOK(t, cs, "build_get_status", map[string]any{"build_id": buildID}, &out)
-	if !out.Done || out.ImageRef != "" || out.Detail != "step 0 failed" {
+	f.steps = []map[string]any{{"id": "", "status": "SUCCESS"}, {"id": "", "status": "FAILURE"}}
+	f.logs = []string{"ERROR: failed to solve", "Step #0: COPY app ./app"}
+	mcpxtest.MustOK(t, cs, "build_get_status", map[string]any{"build_id": buildID}, &out)
+	if !out.Done || out.ImageRef != "" || out.Detail != "step 0 failed" || out.Output != "Step #0: COPY app ./app\nERROR: failed to solve" {
 		t.Fatalf("%+v", out)
 	}
 	f.tags = nil
 	mcpxtest.MustErr(t, cs, "build_get_status", map[string]any{"build_id": buildID}, "not started by Workbench")
 	mcpxtest.MustErr(t, cs, "build_get_status", map[string]any{"build_id": "../../x"}, "build_id")
+}
+
+func TestRunChecksChoosesStepsFromTheProject(t *testing.T) {
+	f, cs := setup(t)
+	var out ChecksOut
+	mcpxtest.MustOK(t, cs, "build_run_checks", map[string]any{"project": "py-app"}, &out)
+	if out.BuildID != buildID || strings.Join(out.Checks, ",") != "install,lint,format,tests" {
+		t.Fatalf("%+v", out)
+	}
+	b, _ := json.Marshal(f.created)
+	for _, want := range []string{`"uv run pytest -q"`, `"wb-kind-checks"`, `"workbench"`, uvImage} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("checks request lacks %s: %s", want, b)
+		}
+	}
+	if strings.Contains(string(b), `"images"`) {
+		t.Errorf("a check run must push no image: %s", b)
+	}
+	mcpxtest.MustOK(t, cs, "build_run_checks", map[string]any{"project": "node-app"}, &out)
+	if strings.Join(out.Checks, ",") != "install,lint,tests" {
+		t.Fatalf("%+v", out)
+	}
+	mcpxtest.MustErr(t, cs, "build_run_checks", map[string]any{"project": "bare-app"}, "checks are unknown")
+}
+
+func TestStatusOfChecksReturnsOutputAndTheFailedStep(t *testing.T) {
+	f, cs := setup(t)
+	f.tags = []string{"workbench", "wb-kind-checks"}
+	f.logs = []string{"Step #3 - \"tests\": 4 passed in 0.31s"}
+	var out StatusOut
+	mcpxtest.MustOK(t, cs, "build_get_status", map[string]any{"build_id": buildID}, &out)
+	if !out.Done || out.ImageRef != "" || !strings.Contains(out.Output, "4 passed") {
+		t.Fatalf("%+v", out)
+	}
+	if !strings.Contains(f.logQuery["filter"].(string), buildID) {
+		t.Fatalf("log query %v", f.logQuery)
+	}
+	f.status = "FAILURE"
+	f.steps = []map[string]any{{"id": "install", "status": "SUCCESS"}, {"id": "lint", "status": "FAILURE"}, {"id": "tests", "status": "QUEUED"}}
+	f.logs = []string{"Step #1 - \"lint\": F401 unused import"}
+	mcpxtest.MustOK(t, cs, "build_get_status", map[string]any{"build_id": buildID}, &out)
+	if out.FailedStep != "lint" || !strings.Contains(out.Output, "F401") {
+		t.Fatalf("%+v", out)
+	}
 }

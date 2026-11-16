@@ -66,7 +66,7 @@ var Tools = map[string][]string{
 		"gitlab_get_pipeline_status",
 	},
 	"build-mcp": {
-		"build_start_image", "build_get_status",
+		"build_start_image", "build_run_checks", "build_get_status",
 	},
 	"cloudrun-mcp": {
 		"cloudrun_deploy_preview", "cloudrun_get_service", "cloudrun_list_revisions", "cloudrun_read_logs",

@@ -880,6 +880,8 @@ phase_tools() {
     --role roles/storage.objectViewer
   # build-mcp: start builds as workbench-builds, write sources.
   grant_project "$pool/build-mcp" roles/cloudbuild.builds.editor
+  # Read its builds' logs, so a failed build or a check run can say why.
+  grant_project "$pool/build-mcp" roles/logging.viewer
   retry gcloud storage buckets add-iam-policy-binding "gs://$bucket" --member "$pool/build-mcp" \
     --role roles/storage.objectCreator
   retry gc iam service-accounts add-iam-policy-binding "$build_sa" --member "$pool/build-mcp" \

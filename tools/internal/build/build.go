@@ -1,7 +1,7 @@
 // Package build implements the build-mcp tools: build a Workbench app's
 // container image from its GitLab project with Cloud Build, and report the
-// digest-pinned reference to deploy. It stands in for a GitLab CI pipeline
-// with Google credentials.
+// digest-pinned reference to deploy; and run the app's lint and tests the
+// same way. It stands in for a GitLab CI pipeline with Google credentials.
 //
 // The source is the project's tree at one commit, fetched through the GitLab
 // client (so only projects in the allowed group can be built), uploaded to a
@@ -11,9 +11,13 @@
 package build
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -36,6 +40,7 @@ type Config struct {
 	ServiceAccount string // email of the service account builds run as
 	CloudBuildURL  string // default https://cloudbuild.googleapis.com
 	StorageURL     string // default https://storage.googleapis.com
+	LoggingURL     string // default https://logging.googleapis.com
 }
 
 var (
@@ -57,6 +62,10 @@ func (c *Config) Validate() error {
 	if c.StorageURL == "" {
 		c.StorageURL = "https://storage.googleapis.com"
 	}
+	if c.LoggingURL == "" {
+		c.LoggingURL = "https://logging.googleapis.com"
+	}
+	c.LoggingURL = strings.TrimRight(c.LoggingURL, "/")
 	c.CloudBuildURL = strings.TrimRight(c.CloudBuildURL, "/")
 	c.StorageURL = strings.TrimRight(c.StorageURL, "/")
 	return nil
@@ -85,7 +94,7 @@ func NewClient(cfg Config, src Source, d httpx.Doer) *Client {
 }
 
 // Instructions is advertised to MCP clients.
-const Instructions = `Build a Workbench app's container image from its GitLab project with Cloud Build. Call build_start_image with the project and ref, then poll build_get_status until it reports SUCCESS and returns image_ref, the digest-pinned reference cloudrun_deploy_preview needs. Builds take one to five minutes.`
+const Instructions = `Build a Workbench app's container image from its GitLab project with Cloud Build, or run its checks. Call build_start_image with the project and ref, then poll build_get_status until it reports SUCCESS and returns image_ref, the digest-pinned reference cloudrun_deploy_preview needs. Builds take one to five minutes. build_run_checks runs the app's lint and tests at a commit; poll build_get_status the same way and read output for the results.`
 
 // Register adds the tools.
 func Register(s *mcpx.Server, c *Client) {
@@ -96,8 +105,15 @@ func Register(s *mcpx.Server, c *Client) {
 		Annotations: mcpx.Mutating("Build app image", false, false, false),
 	}, c.start)
 	mcpx.AddTool(s, &mcp.Tool{
-		Name:        "build_get_status",
-		Description: "Status of a build started with build_start_image; on SUCCESS returns image_ref (digest-pinned) to deploy.",
+		Name: "build_run_checks",
+		Description: "Run a Workbench project's lint, format check and tests at a ref (default: the default branch) in Cloud Build, " +
+			"the same checks as its CI. Returns a build_id at once; poll build_get_status, whose output holds the end of the log.",
+		Annotations: mcpx.Mutating("Run app checks", false, false, false),
+	}, c.checks)
+	mcpx.AddTool(s, &mcp.Tool{
+		Name: "build_get_status",
+		Description: "Status of a build started with build_start_image or build_run_checks. An image build's SUCCESS returns image_ref " +
+			"(digest-pinned) to deploy; a finished check run, or any failed build, returns output: the end of its log.",
 		Annotations: mcpx.ReadOnly("Get build status", false),
 	}, c.status)
 }
@@ -144,8 +160,22 @@ func (c *Client) start(ctx context.Context, call mcpx.Call, in StartIn) (StartOu
 		"serviceAccount": "projects/" + c.cfg.Project + "/serviceAccounts/" + c.cfg.ServiceAccount,
 		"options":        map[string]any{"logging": "CLOUD_LOGGING_ONLY"},
 		"timeout":        "1200s",
-		"tags":           []string{"workbench", "wb-" + name},
+		"tags":           []string{"workbench", tagImage, "wb-" + name},
 	}
+	id, logURL, err := c.create(ctx, body)
+	if err != nil {
+		return StartOut{}, err
+	}
+	return StartOut{BuildID: id, Project: snap.Project, Commit: snap.SHA, Image: image, LogURL: logURL}, nil
+}
+
+// Build kinds, recorded as tags so build_get_status knows what to report.
+const (
+	tagImage  = "wb-kind-image"
+	tagChecks = "wb-kind-checks"
+)
+
+func (c *Client) create(ctx context.Context, body map[string]any) (id, logURL string, err error) {
 	var op struct {
 		Metadata struct {
 			Build struct {
@@ -156,12 +186,122 @@ func (c *Client) start(ctx context.Context, call mcpx.Call, in StartIn) (StartOu
 	}
 	u := c.cfg.CloudBuildURL + "/v1/projects/" + c.cfg.Project + "/builds"
 	if _, err := httpx.Do(ctx, c.http, httpx.Request{Method: http.MethodPost, URL: u, Body: body}, &op); err != nil {
-		return StartOut{}, fmt.Errorf("starting the build: %w", err)
+		return "", "", fmt.Errorf("starting the build: %w", err)
 	}
 	if op.Metadata.Build.ID == "" {
-		return StartOut{}, fmt.Errorf("Cloud Build returned no build id")
+		return "", "", fmt.Errorf("Cloud Build returned no build id")
 	}
-	return StartOut{BuildID: op.Metadata.Build.ID, Project: snap.Project, Commit: snap.SHA, Image: image, LogURL: op.Metadata.Build.LogURL}, nil
+	return op.Metadata.Build.ID, op.Metadata.Build.LogURL, nil
+}
+
+// Checks images: the same toolchains the scaffolds' CI uses.
+const (
+	uvImage   = "ghcr.io/astral-sh/uv:0.11.32-python3.12-bookworm-slim"
+	nodeImage = "node:22-bookworm-slim"
+)
+
+type step struct{ id, image, script string }
+
+// checkSteps chooses the checks from the files at the repository root: a uv
+// project (uv.lock) or an npm project (package-lock.json), as the scaffolds
+// are. Each check is its own step so a failure names what failed.
+func checkSteps(root map[string]bool) ([]step, error) {
+	switch {
+	case root["uv.lock"]:
+		return []step{
+			{"install", uvImage, "uv sync --frozen"},
+			{"lint", uvImage, "uv run ruff check ."},
+			{"format", uvImage, "uv run ruff format --check ."},
+			{"tests", uvImage, "uv run pytest -q"},
+		}, nil
+	case root["package-lock.json"]:
+		return []step{
+			{"install", nodeImage, "npm ci --no-audit --no-fund"},
+			{"lint", nodeImage, "npm run check"},
+			{"tests", nodeImage, "npm test"},
+		}, nil
+	}
+	return nil, validate.Errorf("project", "has neither uv.lock nor package-lock.json at its root, so its checks are unknown")
+}
+
+// rootFiles lists the regular files at the top of a snapshot's tarball.
+func rootFiles(tgz []byte) (map[string]bool, error) {
+	zr, err := gzip.NewReader(bytes.NewReader(tgz))
+	if err != nil {
+		return nil, fmt.Errorf("reading the source: %w", err)
+	}
+	tr := tar.NewReader(zr)
+	out := map[string]bool{}
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading the source: %w", err)
+		}
+		if h.Typeflag == tar.TypeReg && !strings.Contains(strings.TrimPrefix(h.Name, "./"), "/") {
+			out[strings.TrimPrefix(h.Name, "./")] = true
+		}
+	}
+}
+
+// ChecksOut is build_run_checks's output.
+type ChecksOut struct {
+	BuildID string   `json:"build_id"`
+	Project string   `json:"project"`
+	Commit  string   `json:"commit"`
+	Checks  []string `json:"checks" jsonschema:"the checks that run, in order"`
+	LogURL  string   `json:"log_url,omitempty"`
+}
+
+func (c *Client) checks(ctx context.Context, call mcpx.Call, in StartIn) (ChecksOut, error) {
+	if err := validate.Text("project", in.Project, true, 255); err != nil {
+		return ChecksOut{}, err
+	}
+	snap, err := c.src.Source(ctx, in.Project, strings.TrimSpace(in.Ref))
+	if err != nil {
+		return ChecksOut{}, err
+	}
+	name := strings.ToLower(snap.Name)
+	if !imageRe.MatchString(name) {
+		return ChecksOut{}, validate.Errorf("project", "%q is not a usable name", validate.Clip(snap.Name, 80))
+	}
+	root, err := rootFiles(snap.Tarball)
+	if err != nil {
+		return ChecksOut{}, err
+	}
+	plan, err := checkSteps(root)
+	if err != nil {
+		return ChecksOut{}, err
+	}
+	object := "sources/" + name + "/" + snap.SHA + ".tgz"
+	if err := c.upload(ctx, object, snap.Tarball); err != nil {
+		return ChecksOut{}, fmt.Errorf("uploading the source: %w", err)
+	}
+	steps := make([]map[string]any, 0, len(plan))
+	names := make([]string, 0, len(plan))
+	for _, st := range plan {
+		steps = append(steps, map[string]any{
+			"id": st.id, "name": st.image, "entrypoint": "sh", "args": []string{"-c", st.script},
+			// No Python downloads: the image's interpreter is the one CI uses.
+			"env": []string{"UV_PYTHON_DOWNLOADS=never", "CI=true"},
+		})
+		names = append(names, st.id)
+	}
+	body := map[string]any{
+		"source":         map[string]any{"storageSource": map[string]any{"bucket": c.cfg.Bucket, "object": object}},
+		"steps":          steps,
+		"serviceAccount": "projects/" + c.cfg.Project + "/serviceAccounts/" + c.cfg.ServiceAccount,
+		"options":        map[string]any{"logging": "CLOUD_LOGGING_ONLY"},
+		"timeout":        "900s",
+		"tags":           []string{"workbench", tagChecks, "wb-" + name},
+	}
+	id, logURL, err := c.create(ctx, body)
+	if err != nil {
+		return ChecksOut{}, err
+	}
+	return ChecksOut{BuildID: id, Project: snap.Project, Commit: snap.SHA, Checks: names, LogURL: logURL}, nil
 }
 
 func (c *Client) upload(ctx context.Context, object string, data []byte) error {
@@ -194,7 +334,11 @@ type StatusOut struct {
 	Done     bool   `json:"done"`
 	ImageRef string `json:"image_ref,omitempty" jsonschema:"digest-pinned reference, on SUCCESS"`
 	Detail   string `json:"detail,omitempty" jsonschema:"why a build failed"`
-	LogURL   string `json:"log_url,omitempty"`
+	// FailedStep names the step that failed: for checks, install, lint,
+	// format or tests.
+	FailedStep string `json:"failed_step,omitempty"`
+	Output     string `json:"output,omitempty" jsonschema:"the end of the build's log: for a finished check run or any failed build"`
+	LogURL     string `json:"log_url,omitempty"`
 }
 
 func (c *Client) status(ctx context.Context, call mcpx.Call, in StatusIn) (StatusOut, error) {
@@ -208,7 +352,14 @@ func (c *Client) status(ctx context.Context, call mcpx.Call, in StatusIn) (Statu
 		LogURL         string   `json:"logUrl"`
 		Tags           []string `json:"tags"`
 		ServiceAccount string   `json:"serviceAccount"`
-		Results        struct {
+		FailureInfo    struct {
+			Detail string `json:"detail"`
+		} `json:"failureInfo"`
+		Steps []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"steps"`
+		Results struct {
 			Images []struct {
 				Name   string `json:"name"`
 				Digest string `json:"digest"`
@@ -220,10 +371,13 @@ func (c *Client) status(ctx context.Context, call mcpx.Call, in StatusIn) (Statu
 		return StatusOut{}, err
 	}
 	// Only builds this server started are reported.
-	ours := false
+	ours, checks := false, false
 	for _, t := range b.Tags {
-		if t == "workbench" {
+		switch t {
+		case "workbench":
 			ours = true
+		case tagChecks:
+			checks = true
 		}
 	}
 	if !ours {
@@ -233,6 +387,10 @@ func (c *Client) status(ctx context.Context, call mcpx.Call, in StatusIn) (Statu
 	switch b.Status {
 	case "SUCCESS":
 		out.Done = true
+		if checks {
+			out.Output = c.logTail(ctx, b.ID, checksTail)
+			break
+		}
 		for _, img := range b.Results.Images {
 			if strings.HasPrefix(img.Name, c.cfg.ImagePrefix()) && strings.HasPrefix(img.Digest, "sha256:") {
 				name := img.Name
@@ -247,7 +405,57 @@ func (c *Client) status(ctx context.Context, call mcpx.Call, in StatusIn) (Statu
 		}
 	case "FAILURE", "TIMEOUT", "CANCELLED", "INTERNAL_ERROR", "EXPIRED":
 		out.Done = true
-		out.Detail = validate.Clip(b.StatusDetail, 500)
+		detail := b.StatusDetail
+		if b.FailureInfo.Detail != "" && !strings.Contains(detail, b.FailureInfo.Detail) {
+			detail = strings.TrimSpace(detail + " " + b.FailureInfo.Detail)
+		}
+		out.Detail = validate.Clip(detail, 500)
+		for _, st := range b.Steps {
+			if st.Status == "FAILURE" || st.Status == "TIMEOUT" {
+				out.FailedStep = st.ID
+				break
+			}
+		}
+		out.Output = c.logTail(ctx, b.ID, failureTail)
 	}
 	return out, nil
+}
+
+// Lines of log returned: enough for a test summary or a compiler error.
+const (
+	checksTail  = 60
+	failureTail = 80
+	maxOutput   = 12 << 10
+)
+
+// logTail returns the last n lines a build wrote to Cloud Logging, oldest
+// first, or a note saying why it could not. Logs can lag the build's status
+// by a few seconds; an empty tail says so rather than failing the call.
+func (c *Client) logTail(ctx context.Context, buildID string, n int) string {
+	body := map[string]any{
+		"resourceNames": []string{"projects/" + c.cfg.Project},
+		"filter":        `resource.type="build" AND resource.labels.build_id="` + buildID + `"`,
+		"orderBy":       "timestamp desc",
+		"pageSize":      n,
+	}
+	var res struct {
+		Entries []struct {
+			TextPayload string `json:"textPayload"`
+		} `json:"entries"`
+	}
+	if _, err := httpx.Do(ctx, c.http, httpx.Request{Method: http.MethodPost, URL: c.cfg.LoggingURL + "/v2/entries:list", Body: body}, &res); err != nil {
+		return "(the build log could not be read: " + validate.Clip(err.Error(), 200) + ")"
+	}
+	if len(res.Entries) == 0 {
+		return "(no log lines yet; ask again in a few seconds)"
+	}
+	lines := make([]string, 0, len(res.Entries))
+	for i := len(res.Entries) - 1; i >= 0; i-- {
+		lines = append(lines, strings.TrimRight(res.Entries[i].TextPayload, "\n"))
+	}
+	out := strings.Join(lines, "\n")
+	if len(out) > maxOutput {
+		out = "…" + out[len(out)-maxOutput:]
+	}
+	return out
 }
