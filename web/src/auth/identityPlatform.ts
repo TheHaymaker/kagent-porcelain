@@ -17,8 +17,15 @@ function getAuthFor(cfg: WorkbenchConfig): Promise<Auth> {
   auth ??= (async () => {
     const ip = cfg.identityPlatform;
     if (!ip) throw new Error("identityPlatform is not configured.");
-    const [{ initializeApp }, fb] = await Promise.all([import("firebase/app"), import("firebase/auth")]);
-    const app = initializeApp({ apiKey: ip.apiKey, authDomain: ip.authDomain, projectId: ip.projectId });
+    const [{ initializeApp }, fb] = await Promise.all([
+      import("firebase/app"),
+      import("firebase/auth"),
+    ]);
+    const app = initializeApp({
+      apiKey: ip.apiKey,
+      authDomain: ip.authDomain,
+      projectId: ip.projectId,
+    });
     const a = fb.getAuth(app);
     // A tab's sign-in ends with the tab, like the OIDC path's sessionStorage.
     await fb.setPersistence(a, fb.browserSessionPersistence);
@@ -33,39 +40,68 @@ function getAuthFor(cfg: WorkbenchConfig): Promise<Auth> {
  * undefined when signed out; the SDK refreshes the token before it expires
  * and calls again. Returns an unsubscribe function.
  */
-export function watchIdentityPlatform(cfg: WorkbenchConfig, onToken: (token: string | undefined) => void): () => void {
+export function watchIdentityPlatform(
+  cfg: WorkbenchConfig,
+  onToken: (token: string | undefined) => void,
+  onError: (message: string) => void = () => undefined,
+): () => void {
   let stop: (() => void) | undefined;
   let stopped = false;
-  void getAuthFor(cfg).then(async (a) => {
-    const { getRedirectResult, onIdTokenChanged } = await import("firebase/auth");
-    if (stopped) return;
-    // Completes a sign-in that redirected back here; the user then arrives
-    // through onIdTokenChanged. A failed redirect leaves the person signed out.
-    getRedirectResult(a).catch((e: unknown) => {
-      console.error("Sign-in did not complete", e);
+  let heard = false;
+  // If the SDK cannot start (for example its helper frame is blocked), it
+  // never reports a user; fall back to signed out with a reason.
+  const giveUp = window.setTimeout(() => {
+    if (!heard && !stopped) {
+      onError("Sign-in could not start. Reload the page and try again.");
       onToken(undefined);
-    });
-    stop = onIdTokenChanged(a, (user: User | null) => {
-      if (!user) return onToken(undefined);
-      user.getIdToken().then(onToken, () => onToken(undefined));
-    });
-  }, () => onToken(undefined));
+    }
+  }, 20000);
+  const report = (t: string | undefined) => {
+    heard = true;
+    window.clearTimeout(giveUp);
+    onToken(t);
+  };
+  void getAuthFor(cfg).then(
+    async (a) => {
+      const { getRedirectResult, onIdTokenChanged } =
+        await import("firebase/auth");
+      if (stopped) return;
+      // Completes a sign-in that redirected back here; the user then arrives
+      // through onIdTokenChanged. A failed redirect leaves the person signed out.
+      getRedirectResult(a).catch((e: unknown) => {
+        console.error("Sign-in did not complete", e);
+        onError(e instanceof Error ? e.message : "Sign-in did not complete.");
+        report(undefined);
+      });
+      stop = onIdTokenChanged(a, (user: User | null) => {
+        if (!user) return report(undefined);
+        user.getIdToken().then(report, () => report(undefined));
+      });
+    },
+    () => report(undefined),
+  );
   return () => {
     stopped = true;
+    window.clearTimeout(giveUp);
     stop?.();
   };
 }
 
 /** Redirects to Google; the browser comes back to the page it left. */
-export async function signInWithIdentityPlatform(cfg: WorkbenchConfig): Promise<void> {
+export async function signInWithIdentityPlatform(
+  cfg: WorkbenchConfig,
+): Promise<void> {
   const a = await getAuthFor(cfg);
-  const { GoogleAuthProvider, signInWithRedirect } = await import("firebase/auth");
+  const { GoogleAuthProvider, signInWithRedirect } =
+    await import("firebase/auth");
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
   await signInWithRedirect(a, provider);
 }
 
-export async function signOutOfIdentityPlatform(cfg: WorkbenchConfig): Promise<void> {
+export async function signOutOfIdentityPlatform(
+  cfg: WorkbenchConfig,
+): Promise<void> {
   const a = await getAuthFor(cfg);
   const { signOut } = await import("firebase/auth");
   await signOut(a);

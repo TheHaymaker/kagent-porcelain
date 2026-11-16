@@ -6,9 +6,10 @@ import { ErrorBanner, Loading } from "@/ui/States";
 import { useAuth } from "./AuthContext";
 
 export function SignIn({ returnTo }: { returnTo: string }) {
-  const { signIn } = useAuth();
+  const { signIn, error: authError } = useAuth();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [localError, setError] = useState<string>();
+  const error = localError ?? authError;
   return (
     <main className="signin">
       <div className="signin-card">
@@ -16,7 +17,10 @@ export function SignIn({ returnTo }: { returnTo: string }) {
           <span className="brand-mark">W</span>
         </div>
         <h1>Welcome to Workbench</h1>
-        <p className="muted">Describe the app you need in plain words. A builder agent makes it, checks in when something matters, and hands you a working link.</p>
+        <p className="muted">
+          Describe the app you need in plain words. A builder agent makes it,
+          checks in when something matters, and hands you a working link.
+        </p>
         {error && <ErrorBanner message={error} />}
         <Button
           variant="primary"
@@ -35,7 +39,10 @@ export function SignIn({ returnTo }: { returnTo: string }) {
         >
           Sign in with your company account
         </Button>
-        <p className="muted small">You'll be sent to your company's sign-in page and brought straight back.</p>
+        <p className="muted small">
+          You'll be sent to your company's sign-in page and brought straight
+          back.
+        </p>
       </div>
     </main>
   );
@@ -51,7 +58,9 @@ export function AuthCallback() {
     done.current = true;
     completeSignIn()
       .then((to) => navigate(to, { replace: true }))
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Sign-in failed."));
+      .catch((e: unknown) =>
+        setError(e instanceof Error ? e.message : "Sign-in failed."),
+      );
   }, [completeSignIn, navigate]);
   if (error)
     return (
@@ -59,7 +68,10 @@ export function AuthCallback() {
         <div className="signin-card">
           <h1>Sign-in didn't finish</h1>
           <ErrorBanner message={error} />
-          <Button variant="primary" onClick={() => navigate("/", { replace: true })}>
+          <Button
+            variant="primary"
+            onClick={() => navigate("/", { replace: true })}
+          >
             Start again
           </Button>
         </div>
