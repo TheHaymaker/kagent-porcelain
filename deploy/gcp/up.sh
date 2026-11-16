@@ -633,18 +633,27 @@ print(json.dumps({"authorizedDomains": d}))' "$STATE/idp.json" "$host" "${PROJEC
   [[ $code == 200 ]] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("enabled") else 1)' "$STATE/idp.json" && google_ready=1
   rm -f "$STATE/idp.json"
 
-  say "Browser API key (public by design: Identity Toolkit only, from $host only)"
+  say "Browser API key (public by design: Identity Toolkit only, from $host and the auth domain)"
   local keyfile="$STATE/secrets/browser-api-key" name
   if [[ ! -s $keyfile ]]; then
     revoke_keys workbench-web-browser
     name=$(gc services api-keys create --display-name workbench-web-browser \
       --api-target service=identitytoolkit.googleapis.com --api-target service=securetoken.googleapis.com \
-      --allowed-referrers "https://$host/*" --format 'value(response.name)' 2>"$STATE/apikey.err") || {
+      --allowed-referrers "https://$host/*,https://${PROJECT_ID}.firebaseapp.com/*" --format 'value(response.name)' 2>"$STATE/apikey.err") || {
       grep -vi keystring "$STATE/apikey.err" >&2; rm -f "$STATE/apikey.err"; die "cannot create the browser API key"
     }
     rm -f "$STATE/apikey.err"
     (umask 077; gc services api-keys get-key-string "$name" --format 'value(keyString)' > "$keyfile" 2>/dev/null)
   fi
+  # The sign-in popup runs on the auth domain's handler page, which calls
+  # Identity Toolkit with the same key, so both sites must be allowed.
+  for name in $(gc services api-keys list --filter "displayName=workbench-web-browser" --format 'value(name)'); do
+    gc services api-keys update "$name" --format none \
+      --allowed-referrers "https://$host/*,https://${PROJECT_ID}.firebaseapp.com/*" 2>"$STATE/apikey.err" || {
+      grep -vi keystring "$STATE/apikey.err" >&2; rm -f "$STATE/apikey.err"; die "cannot update the browser API key's allowed sites"
+    }
+  done
+  rm -f "$STATE/apikey.err"
 
   (umask 077; printf 'EXPOSE_HOST=%q\nWORKBENCH_ADMINS=%q\n' "$host" "$WORKBENCH_ADMINS" > "$EXPOSE_ENV")
   phase_workbench
