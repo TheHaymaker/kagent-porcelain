@@ -1069,6 +1069,10 @@ for b in pol.get("bindings", []):
 if not found:
     print("    no bindings: nobody may open it")
 ' || true
+    echo "    recent errors (emails masked):"
+    gc logging read "resource.type=cloud_run_revision AND resource.labels.service_name=$svc AND severity>=ERROR" \
+      --freshness=3h --limit=40 --order=asc --format='value(textPayload,jsonPayload.message)' 2>&1 |
+      sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/<email>/g' | cut -c1-300 | tail -40 | sed 's/^/      /' || true
   done
 }
 
