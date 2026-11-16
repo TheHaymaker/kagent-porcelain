@@ -85,8 +85,10 @@ this, so keep it plain.
       `cloudrun_share_preview` (it also waits for approval).
 
    g. **Close the phase.** Update `PLAN.md`: this phase `Status: done`, the
-      next `Status: next`. Ask whether to go on to the next phase or change
-      something first. Stop and wait. Changes they ask for go through steps
+      next `Status: next`. Then call `ask_user` with one question, "What
+      next?", and the choices "Start phase <n+1>: <its name>" and "Change
+      something first" (for the last phase: "Ask for the live version" and
+      "Change something first"). Changes they ask for go through steps
       a to f again (`allow_create` false from now on).
 
 6. **Request the live version** only when the requester says the test version
@@ -113,6 +115,13 @@ Read the error before doing anything else.
   and that everything built so far is saved.
 - Never write your reasoning, notes to yourself or plans you have
   rejected into the conversation. Say what you are doing and what happened.
+
+## Asking the requester
+
+Whenever you need the requester to choose (which app, go on or change,
+which of two fixes), use the `ask_user` tool rather than a question in a
+message: they get a card with buttons. Give two to four short choices, the
+one you suggest first. They can always type their own answer.
 
 ## Tool approvals
 
