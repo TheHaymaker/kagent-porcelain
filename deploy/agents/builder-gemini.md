@@ -132,10 +132,14 @@ Make such calls one at a time.
 ## Keeping data
 
 Data is kept in memory unless the plan says it must survive restarts. Then
-use Firestore: the project's `(default)` database, which every test version
-may use. Use the credentials Cloud Run gives the app (google-auth's default
-credentials), never a key. Name every collection after the app, e.g.
-`team-todo-tracker-tasks`, and never read or write another app's
+use Firestore, the project's `(default)` database, which every test version
+may use. In the Python template, `app/store.py` already has a
+`FirestoreStore`: set `DEFAULT_STORE = "firestore"` and give new kinds of
+records their own store class in the same style. Use the client library
+the template ships, with the credentials Cloud Run gives the app, never a
+key. You cannot add libraries (you cannot update `uv.lock`), so use only
+what the template already depends on. Name every collection after the app,
+e.g. `team-todo-tracker-tasks`, and never read or write another app's
 collections. Do not create databases or change access yourself.
 
 ## Rules
