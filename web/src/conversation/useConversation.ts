@@ -31,6 +31,7 @@ import { ApprovalState, type Approval } from "@/gen/workbench/v1/approvals_pb";
 import type { Session } from "@/gen/kagent/api/v1/sessions_pb";
 import { newRequestId } from "@/lib/format";
 import { activeTurn, conversationReducer, initialConversation } from "./state";
+import { decidedPauseTask } from "./follow";
 
 export function useConversation(sessionId: string, fallbackAgent: string) {
   const [state, dispatch] = useReducer(
@@ -95,19 +96,15 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
             : undefined,
         })),
       });
-      // A pause can be decided without this page: a remembered answer, an
-      // approver elsewhere, the Approvals page. Once the newest approval of
-      // the paused turn is decided, follow the task so the conversation sees
-      // it resume (if the decision has not reached it yet, the next poll
-      // tries again).
-      const turn = activeTurn(stateRef.current);
-      if (turn?.state === "input_required") {
-        const newest = response.approvals
-          .filter((a) => a.taskId === turn.taskId)
-          .sort((a, b) => Number((b.createdAt?.seconds ?? 0n) - (a.createdAt?.seconds ?? 0n)))[0];
-        if (newest && (newest.state === ApprovalState.APPROVED || newest.state === ApprovalState.REJECTED))
-          followRef.current(turn.taskId);
-      }
+      // A tool approval can be decided without this page: a remembered
+      // answer, an approver elsewhere, the Approvals page. When the decided
+      // approval is for the very calls the turn is paused on, follow the
+      // task so the conversation sees it resume (if the decision has not
+      // reached it yet, the next poll tries again). Only then: a turn paused
+      // on a question, or on calls whose approval is still open, is left
+      // alone, or the page would re-follow it every poll.
+      const taskId = decidedPauseTask(stateRef.current, response.approvals);
+      if (taskId) followRef.current(taskId);
     } catch (err) {
       if (!isAbort(err)) setError(friendlyError(err));
     }
