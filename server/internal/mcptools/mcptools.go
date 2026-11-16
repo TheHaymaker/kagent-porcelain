@@ -31,6 +31,7 @@ const (
 	ToolRecordDeployment = "workbench_record_deployment"
 	ToolRequestPromotion = "workbench_request_promotion"
 	ToolGetApp           = "workbench_get_app"
+	ToolGetRequester     = "workbench_get_requester"
 )
 
 // Tools holds what the tools need.
@@ -67,6 +68,9 @@ func (t *Tools) Register(s *mcp.Server) error {
 	mcp.AddTool(s, &mcp.Tool{Name: ToolGetApp, Title: "Read an app",
 		Description: "Read an app's status, environments and URLs from the Workbench catalogue.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: no}}, t.getApp)
+	mcp.AddTool(s, &mcp.Tool{Name: ToolGetRequester, Title: "Who asked",
+		Description: "The name and email address of the person this conversation is for, e.g. to give them access to their app's test version.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: no}}, t.getRequester)
 	return nil
 }
 
@@ -317,4 +321,22 @@ func (t *Tools) getApp(ctx context.Context, _ *mcp.CallToolRequest, in GetAppInp
 		out.CostCentsMTD = spent[app.ID] / 10_000
 	}
 	return nil, out, nil
+}
+
+// RequesterOutput is workbench_get_requester's result.
+type RequesterOutput struct {
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email"`
+}
+
+func (t *Tools) getRequester(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, RequesterOutput, error) {
+	c, err := t.runtime(ctx)
+	if err != nil {
+		return nil, RequesterOutput{}, err
+	}
+	p, err := t.Store.GetPerson(ctx, c.CreatorID)
+	if err != nil || p.Email == "" {
+		return nil, RequesterOutput{}, errors.New("the requester's email address is not known yet; they need to have signed in to Workbench")
+	}
+	return nil, RequesterOutput{Name: p.DisplayName, Email: p.Email}, nil
 }

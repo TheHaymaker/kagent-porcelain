@@ -184,3 +184,16 @@ func TestOnlyRuntimesAndOwners(t *testing.T) {
 		t.Fatal("an agent must not read another requester's app")
 	}
 }
+
+func TestGetRequester(t *testing.T) {
+	tools, s, _ := setup(t)
+	cs := connect(t, tools, runtime)
+	if _, isErr := call(t, cs, ToolGetRequester, map[string]any{}); !isErr {
+		t.Fatal("a requester with no known email must be reported, not invented")
+	}
+	_ = s.UpsertPerson(context.Background(), store.Person{ID: "alice", Email: "alice@example.com", DisplayName: "Alice"})
+	out, isErr := call(t, cs, ToolGetRequester, map[string]any{})
+	if isErr || out["email"] != "alice@example.com" || out["name"] != "Alice" {
+		t.Fatalf("%v", out)
+	}
+}
