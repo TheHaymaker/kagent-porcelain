@@ -7,6 +7,9 @@ matter, and gets a running app with a record of everything that happened.
 
 Start with the [PRD](docs/prd.md). [docs/status.md](docs/status.md) says what
 is built, what is tested, and what is still missing.
+[docs/architecture.md](docs/architecture.md) describes the whole stack: every
+component, every Google Cloud product, the identities and their permissions,
+and how a request flows from idea to running test version.
 
 ```
                 ┌─────────── web (React) ── later: Teams bot, iOS/Android
@@ -43,7 +46,7 @@ is built, what is tested, and what is still missing.
 | [`agents/`](agents) | The Claude Code builder agent pack: templates, skills, sandbox image, egress, model gateway |
 | [`scaffolds/`](scaffolds) | Golden paths: FastAPI on Cloud Run, Streamlit on BigQuery, React + Express |
 | [`deploy/`](deploy) | Example configuration, Helm overlay on kagent's chart, Workbench chart, database grants |
-| [`docs/`](docs) | PRD, decision records, status |
+| [`docs/`](docs) | PRD, architecture and tech stack, decision records, status |
 
 ## The approval model in one paragraph
 

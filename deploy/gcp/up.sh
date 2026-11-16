@@ -856,7 +856,7 @@ phase_tools() {
   gcloud storage buckets update "gs://$bucket" --lifecycle-file "$STATE/lifecycle.json" >/dev/null
   rm -f "$STATE/lifecycle.json"
   local sa
-  for sa in workbench-builds:"Workbench app image builds" workbench-preview:"Workbench preview apps (no roles)"; do
+  for sa in workbench-builds:"Workbench app image builds" workbench-preview:"Workbench preview apps (Firestore only)"; do
     gc iam service-accounts describe "${sa%%:*}@$PROJECT_ID.iam.gserviceaccount.com" >/dev/null 2>&1 ||
       gc iam service-accounts create "${sa%%:*}" --display-name "${sa#*:}" >/dev/null
   done
