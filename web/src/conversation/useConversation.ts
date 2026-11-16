@@ -46,6 +46,13 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
   const [approvals, setApprovals] = useState<Record<string, Approval>>({});
   const streamRef = useRef<AbortController | undefined>(undefined);
   const followingRef = useRef(new Set<string>());
+  // refreshApprovals runs before follow exists (follow -> run -> refreshApprovals),
+  // so it reaches follow and the latest state through refs.
+  const followRef = useRef<(taskId: string) => void>(() => {});
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
   const mounted = useRef(true);
 
   const agent = session?.agent?.ref
@@ -88,6 +95,19 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
             : undefined,
         })),
       });
+      // A pause can be decided without this page: a remembered answer, an
+      // approver elsewhere, the Approvals page. Once the newest approval of
+      // the paused turn is decided, follow the task so the conversation sees
+      // it resume (if the decision has not reached it yet, the next poll
+      // tries again).
+      const turn = activeTurn(stateRef.current);
+      if (turn?.state === "input_required") {
+        const newest = response.approvals
+          .filter((a) => a.taskId === turn.taskId)
+          .sort((a, b) => Number((b.createdAt?.seconds ?? 0n) - (a.createdAt?.seconds ?? 0n)))[0];
+        if (newest && (newest.state === ApprovalState.APPROVED || newest.state === ApprovalState.REJECTED))
+          followRef.current(turn.taskId);
+      }
     } catch (err) {
       if (!isAbort(err)) setError(friendlyError(err));
     }
@@ -141,6 +161,10 @@ export function useConversation(sessionId: string, fallbackAgent: string) {
     },
     [run],
   );
+
+  useEffect(() => {
+    followRef.current = (taskId) => void follow(taskId);
+  }, [follow]);
 
   // Load everything the server already knows about this conversation.
   useEffect(() => {
