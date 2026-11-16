@@ -67,8 +67,16 @@ What it took, in order:
   titled in plain words; read-only Cloud Run calls need no approval.
 
 Known rough edges: the builder's progress card (`workbench_show`) is often
-rejected, and Gemini's prose sometimes needs the tightened failure rules in
-`deploy/agents/builder-gemini.md`.
+rejected (now left out of the prompts), and Gemini's prose sometimes needs
+the tightened failure rules in `deploy/agents/builder-gemini.md`.
+
+### Planning, testing and review (ADR 0006)
+
+The builder now has three helpers, Shared subagents in its runtime: a
+planner that agrees a phased plan with the requester, a tester that writes
+tests for each phase's checks and runs them (`build_run_checks` in
+build-mcp), and a read-only reviewer. The builder commits the plan as
+`PLAN.md` and builds one phase at a time, each ending in a test version.
 
 ## Requirements
 
@@ -100,8 +108,9 @@ rejected, and Gemini's prose sometimes needs the tightened failure rules in
 
 ## Not yet done, in order of importance
 
-1. **The agent roster** (Concierge, Discovery/Definition, Planner, builder
-   with Tester, Verifier and Code reviewer subagents); not started.
+1. **The rest of the agent roster** (ADR 0006): a Verifier that opens the
+   running test version, a Concierge (needs dedicated subagents or a web
+   agent picker), and the others listed there.
 2. **Preview panel inside Workbench** through a preview proxy on its own
    origin; designed, not started.
 3. **Fix the builder's progress cards** (`workbench_show` rejections).

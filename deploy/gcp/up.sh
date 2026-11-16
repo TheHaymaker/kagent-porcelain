@@ -21,7 +21,7 @@
 #   up.sh gitlab-setup GitLab group, apps/templates subgroups, scaffolds
 #   up.sh tools      builds repo, buckets, service accounts and the builder's
 #                    tool servers (needs gitlab-setup)
-#   up.sh builder    the Gemini builder agent (needs model and tools)
+#   up.sh builder    the Gemini builder agent and its planner, tester and reviewer helpers
 #   up.sh web-check  diagnose web sign-in: the /__/ handler proxy (read-only)
 #   up.sh tools-check  tool servers' recent failed calls, preview services (read-only)
 #   up.sh all        every phase in order
@@ -956,14 +956,20 @@ phase_builder() {
   kubeconfig
   kubectl -n "$NAMESPACE" get modelconfig workbench-gemini >/dev/null 2>&1 || die "run up.sh model first"
   kubectl -n "$NAMESPACE" get remotemcpserver gitlab-mcp >/dev/null 2>&1 || die "run up.sh tools first"
-  say "Builder agent (Gemini)"
-  kubectl -n "$NAMESPACE" create configmap workbench-builder-prompt \
-    --from-file=builder.md="$ROOT/deploy/agents/builder-gemini.md" --dry-run=client -o yaml | kubectl apply -f -
+  say "Builder agent and its helpers (Gemini)"
+  local a args=()
+  for a in builder planner tester reviewer; do
+    args+=(--from-file="$a.md=$ROOT/deploy/agents/$a-gemini.md")
+  done
+  kubectl -n "$NAMESPACE" create configmap workbench-builder-prompt "${args[@]}" --dry-run=client -o yaml | kubectl apply -f -
   NAMESPACE=$NAMESPACE python3 -c 'import os,string,sys; print(string.Template(sys.stdin.read()).substitute(os.environ))' \
     < "$ROOT/deploy/agents/builder-gemini.yaml.tmpl" | kubectl apply -f -
   if ! kubectl -n "$NAMESPACE" wait agent/workbench-builder --for=condition=Ready --timeout 5m; then
     kubectl -n "$NAMESPACE" get agent workbench-builder -o jsonpath='{.status}' >&2; echo >&2
-    kubectl -n "$NAMESPACE" get agenttemplate workbench-builder -o jsonpath='{.status}' >&2; echo >&2
+    for a in builder planner tester reviewer; do
+      echo "--- agenttemplate/workbench-$a" >&2
+      kubectl -n "$NAMESPACE" get agenttemplate "workbench-$a" -o jsonpath='{.status}' >&2 || true; echo >&2
+    done
     local r
     for r in workbench-api gitlab-mcp build-mcp artifactregistry-mcp cloudrun-mcp; do
       echo "--- remotemcpserver/$r" >&2

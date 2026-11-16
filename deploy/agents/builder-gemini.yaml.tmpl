@@ -7,6 +7,62 @@
 # Workbench's own, GitLab (files and projects in the apps group), build
 # (Cloud Build), Cloud Run previews (changes need approval) and the
 # builds repository.
+#
+# Three helpers are Shared subagents (ADR 0006): kagent compiles them into
+# the builder's runtime as ADK sub-agents, each with only the tools bound
+# below. The builder and helpers pass the conversation with
+# transfer_to_agent; a helper keeps it until it hands back.
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: workbench-planner
+  namespace: ${NAMESPACE}
+  labels: {app.kubernetes.io/part-of: workbench}
+spec:
+  description: Agrees a small, phased plan for an app with the requester. No tools.
+  modelConfig: {name: workbench-gemini}
+  systemPromptFrom:
+    name: workbench-builder-prompt
+    key: planner.md
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: workbench-tester
+  namespace: ${NAMESPACE}
+  labels: {app.kubernetes.io/part-of: workbench}
+spec:
+  description: Writes tests for a phase's checks and runs the app's lint and tests.
+  modelConfig: {name: workbench-gemini}
+  systemPromptFrom:
+    name: workbench-builder-prompt
+    key: tester.md
+  tools:
+    - mcp:
+        server: {kind: RemoteMCPServer, name: gitlab-mcp}
+        tools: [gitlab_get_project, gitlab_list_files, gitlab_get_file, gitlab_commit_files]
+    - mcp:
+        server: {kind: RemoteMCPServer, name: build-mcp}
+        tools: [build_run_checks, build_get_status]
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: workbench-reviewer
+  namespace: ${NAMESPACE}
+  labels: {app.kubernetes.io/part-of: workbench}
+spec:
+  description: Reads an app's code after a phase and reports what must change. Read-only.
+  modelConfig: {name: workbench-gemini}
+  systemPromptFrom:
+    name: workbench-builder-prompt
+    key: reviewer.md
+  tools:
+    - mcp:
+        server: {kind: RemoteMCPServer, name: gitlab-mcp}
+        tools: [gitlab_get_project, gitlab_list_files, gitlab_get_file]
+---
 apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
 metadata:
@@ -37,6 +93,24 @@ spec:
         server: {kind: RemoteMCPServer, name: cloudrun-mcp}
         tools: [cloudrun_deploy_preview, cloudrun_delete_preview_service, cloudrun_set_iam_invoker, cloudrun_share_preview]
         requireApproval: true
+    - subAgent:
+        name: planner
+        description: >-
+          Agrees a small, phased plan for a new app or a big change with the
+          requester, then hands back. Use before building anything new.
+        templateRef: {name: workbench-planner}
+    - subAgent:
+        name: tester
+        description: >-
+          Writes tests for the current phase's checks, runs the app's lint and
+          tests in Cloud Build, and reports. Use after each phase is written.
+        templateRef: {name: workbench-tester}
+    - subAgent:
+        name: reviewer
+        description: >-
+          Reads the app's code after a phase and reports must-fix problems
+          (security, privacy, unmet checks) and suggestions. Read-only.
+        templateRef: {name: workbench-reviewer}
 ---
 apiVersion: api.kagent.dev/v1alpha3
 kind: Agent
