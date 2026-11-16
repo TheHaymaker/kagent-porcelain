@@ -4,6 +4,22 @@ import { LogIn } from "lucide-react";
 import { Button } from "@/ui/Button";
 import { ErrorBanner, Loading } from "@/ui/States";
 import { useAuth } from "./AuthContext";
+import { config } from "@/config";
+import { renderGoogleButton } from "./googleSignIn";
+
+/** Google's own "Sign in with Google" button (authProvider "google"). */
+function GoogleButton({ onError }: { onError: (m: string) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (ref.current)
+      renderGoogleButton(ref.current).catch((e: unknown) =>
+        onError(
+          e instanceof Error ? e.message : "Google sign-in could not start.",
+        ),
+      );
+  }, [onError]);
+  return <div ref={ref} className="signin-google" />;
+}
 
 export function SignIn({ returnTo }: { returnTo: string }) {
   const { signIn, error: authError } = useAuth();
@@ -22,27 +38,39 @@ export function SignIn({ returnTo }: { returnTo: string }) {
           checks in when something matters, and hands you a working link.
         </p>
         {error && <ErrorBanner message={error} />}
-        <Button
-          variant="primary"
-          size="lg"
-          icon={<LogIn size={18} />}
-          busy={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await signIn(returnTo);
-            } catch (e) {
-              setError(e instanceof Error ? e.message : "Sign-in failed.");
-              setBusy(false);
-            }
-          }}
-        >
-          Sign in with your company account
-        </Button>
-        <p className="muted small">
-          You'll be sent to your company's sign-in page and brought straight
-          back.
-        </p>
+        {config().authProvider === "google" ? (
+          <>
+            <GoogleButton onError={setError} />
+            <p className="muted small">
+              Use your Google account. You stay signed in while this tab is
+              open.
+            </p>
+          </>
+        ) : (
+          <>
+            <Button
+              variant="primary"
+              size="lg"
+              icon={<LogIn size={18} />}
+              busy={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await signIn(returnTo);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Sign-in failed.");
+                  setBusy(false);
+                }
+              }}
+            >
+              Sign in with your company account
+            </Button>
+            <p className="muted small">
+              You'll be sent to your company's sign-in page and brought straight
+              back.
+            </p>
+          </>
+        )}
       </div>
     </main>
   );

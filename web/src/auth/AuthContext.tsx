@@ -13,6 +13,7 @@ import { registerAuthTokenSource } from "@/api/transport";
 import { api } from "@/api/clients";
 import type { GetMeResponse } from "@/gen/workbench/v1/identity_pb";
 import { bearerOf, userManager } from "./oidc";
+import { signOutOfGoogle, watchGoogle } from "./googleSignIn";
 import {
   signInWithIdentityPlatform,
   signOutOfIdentityPlatform,
@@ -45,6 +46,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       registerAuthTokenSource(() => "mock-token");
       setStatus("signed-in");
       return;
+    }
+    if (cfg.authProvider === "google") {
+      let token: string | undefined;
+      registerAuthTokenSource(() => token);
+      return watchGoogle(cfg, (t) => {
+        if (t) setError(undefined);
+        token = t;
+        setStatus(t ? "signed-in" : "signed-out");
+        setUser(null);
+      });
     }
     if (cfg.authProvider === "identity-platform") {
       let token: string | undefined;
@@ -103,6 +114,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(
     async (returnTo?: string) => {
       if (cfg.mock) return;
+      // Google's own button signs people in (see SignIn); nothing to start.
+      if (cfg.authProvider === "google") return;
       if (cfg.authProvider === "identity-platform")
         return signInWithIdentityPlatform(cfg);
       await userManager(cfg).signinRedirect({
@@ -116,6 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
   const signOut = useCallback(async () => {
     if (cfg.mock) return;
+    if (cfg.authProvider === "google") return signOutOfGoogle();
     if (cfg.authProvider === "identity-platform")
       return signOutOfIdentityPlatform(cfg);
     await userManager(cfg).signoutRedirect();

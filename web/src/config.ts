@@ -11,8 +11,10 @@ export interface IdentityPlatformConfig {
 }
 
 export interface WorkbenchConfig {
-  /** How people sign in: generic OIDC (code + PKCE) or Google Identity Platform (ADR 0005). */
-  authProvider: "oidc" | "identity-platform";
+  /** How people sign in: generic OIDC (code + PKCE), Google Identity Services, or Google Identity Platform (ADR 0005). */
+  authProvider: "oidc" | "google" | "identity-platform";
+  /** OAuth client ID for authProvider "google" (public). */
+  googleClientId?: string;
   identityPlatform?: IdentityPlatformConfig;
   oidcIssuer: string;
   oidcClientId: string;
@@ -28,17 +30,26 @@ export interface WorkbenchConfig {
 
 let current: WorkbenchConfig | undefined;
 
-export async function loadConfig(url = "/config.json"): Promise<WorkbenchConfig> {
+export async function loadConfig(
+  url = "/config.json",
+): Promise<WorkbenchConfig> {
   const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok) throw new Error(`Could not load ${url} (${response.status}).`);
+  if (!response.ok)
+    throw new Error(`Could not load ${url} (${response.status}).`);
   const raw = (await response.json()) as Partial<WorkbenchConfig>;
   current = normaliseConfig(raw);
   return current;
 }
 
-export function normaliseConfig(raw: Partial<WorkbenchConfig>): WorkbenchConfig {
+export function normaliseConfig(
+  raw: Partial<WorkbenchConfig>,
+): WorkbenchConfig {
   return {
-    authProvider: raw.authProvider === "identity-platform" ? "identity-platform" : "oidc",
+    authProvider:
+      raw.authProvider === "identity-platform" || raw.authProvider === "google"
+        ? raw.authProvider
+        : "oidc",
+    googleClientId: raw.googleClientId,
     identityPlatform: raw.identityPlatform,
     oidcIssuer: raw.oidcIssuer ?? "",
     oidcClientId: raw.oidcClientId ?? "",

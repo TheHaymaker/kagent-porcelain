@@ -97,6 +97,8 @@ jobs:
           # so emails and IP addresses never appear in this public repo's logs.
           WORKBENCH_ADMINS: ${{ secrets.WORKBENCH_ADMINS }}
           WORKBENCH_ALLOWED_RANGES: ${{ secrets.WORKBENCH_ALLOWED_RANGES }}
+          # The web app's OAuth client ID (public; an environment variable).
+          WORKBENCH_GOOGLE_CLIENT_ID: ${{ vars.WORKBENCH_GOOGLE_CLIENT_ID }}
           # For the GitLab tool server; masked, never printed.
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           GITLAB_BASE_URL: ${{ vars.GITLAB_BASE_URL || 'https://gitlab.com' }}

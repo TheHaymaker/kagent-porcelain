@@ -13,7 +13,8 @@
 #                    real-model check (workbench-smoke chat)
 #   up.sh expose     public HTTPS address behind Google sign-in and a Cloud
 #                    Armor allowlist (ADR 0005); needs WORKBENCH_ADMINS and
-#                    WORKBENCH_ALLOWED_RANGES
+#                    WORKBENCH_ALLOWED_RANGES; with WORKBENCH_GOOGLE_CLIENT_ID
+#                    the web app signs in with Google's own button
 #   up.sh unexpose   back to private (port-forward) with the smoke test's issuer
 #   up.sh gitlab-find  list GitLab connections Google Cloud holds (read-only)
 #   up.sh gitlab-check what GITLAB_TOKEN acts as and can reach (read-only)
@@ -532,7 +533,11 @@ W
   runtimeConfig:
     apiBaseUrl: /api
     defaultAgent: $NAMESPACE/workbench-builder
-    authProvider: identity-platform
+$(if [[ -n ${WORKBENCH_GOOGLE_CLIENT_ID:-} ]]; then
+  printf '    authProvider: google\n    googleClientId: %s\n' "$WORKBENCH_GOOGLE_CLIENT_ID"
+else
+  printf '    authProvider: identity-platform\n'
+fi)
     identityPlatform:
       apiKey: $(<"$STATE/secrets/browser-api-key")
       # The app's own host: nginx proxies the sign-in handler at /__/.
@@ -570,6 +575,19 @@ W
         url: https://securetoken.google.com/$PROJECT_ID
         audiences: [$PROJECT_ID]
         jwksUrl: https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com
+        surface: web
+        emailGroups:
+W
+  for email in ${WORKBENCH_ADMINS//,/ }; do
+    printf '          "%s": [workbench-requesters, workbench-approvers, workbench-platform, workbench-audit]\n' "$email"
+  done
+  [[ -n ${WORKBENCH_GOOGLE_CLIENT_ID:-} ]] || return 0
+  cat <<W
+      # Google Identity Services ("Sign in with Google"): Google ID tokens for
+      # the web app's OAuth client. Same roles by verified email.
+      - kind: company
+        url: https://accounts.google.com
+        audiences: [$WORKBENCH_GOOGLE_CLIENT_ID]
         surface: web
         emailGroups:
 W
@@ -658,7 +676,12 @@ print(json.dumps({"authorizedDomains": d}))' "$STATE/idp.json" "$host" "${PROJEC
   done
   rm -f "$STATE/apikey.err"
 
-  (umask 077; printf 'EXPOSE_HOST=%q\nWORKBENCH_ADMINS=%q\n' "$host" "$WORKBENCH_ADMINS" > "$EXPOSE_ENV")
+  # Keep a previously configured client ID if this run was not given one.
+  if [[ -z ${WORKBENCH_GOOGLE_CLIENT_ID:-} && -s $EXPOSE_ENV ]]; then
+    WORKBENCH_GOOGLE_CLIENT_ID=$(sed -n "s/^WORKBENCH_GOOGLE_CLIENT_ID=//p" "$EXPOSE_ENV")
+  fi
+  (umask 077; printf 'EXPOSE_HOST=%q\nWORKBENCH_ADMINS=%q\nWORKBENCH_GOOGLE_CLIENT_ID=%q\n' \
+    "$host" "$WORKBENCH_ADMINS" "${WORKBENCH_GOOGLE_CLIENT_ID:-}" > "$EXPOSE_ENV")
   phase_workbench
 
   say "Load balancer"
@@ -930,9 +953,9 @@ phase_web_check() {
           case "$p" in *init.json) head -c 300 /tmp/b | sed "s/^/    /"; echo;; esac
         done
       done' || true
-  say "workbench-web nginx errors (last 30)"
+  say "workbench-web nginx errors (last 30; access lines are never printed)"
   kubectl -n "$NAMESPACE" logs -l app.kubernetes.io/name=workbench-web --tail=200 2>&1 |
-    grep -iE "error|warn|/__/" | tail -30 || true
+    grep -E "\[(error|warn|crit)\]" | tail -30 || true
   kubectl -n "$NAMESPACE" get configmap workbench-web-config -o jsonpath='{.data.config\.json}' |
     python3 -c 'import json,sys; c=json.load(sys.stdin); ip=c.get("identityPlatform",{}); print("config: authProvider=%s authDomain=%s projectId=%s" % (c.get("authProvider"), ip.get("authDomain"), ip.get("projectId")))'
 }
