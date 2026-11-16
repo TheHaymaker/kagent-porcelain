@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 import { safeHttpsUrl } from "@/lib/format";
 
 const INLINE =
-  /(\*\*([^*]+)\*\*|\*([^*]+)\*|_([^_]+)_|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)|(https:\/\/[^\s<>()\[\]*`]+[^\s<>()\[\]*`.,;:!?'"]))/g;
+  /(\*\*([^*]+)\*\*|\*([^*]+)\*|_([^_]+)_|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)|(https:\/\/[^\s<>()[\]*`]+[^\s<>()[\]*`.,;:!?'"]))/g;
 
 export function renderInline(text: string, keyPrefix = "i"): ReactNode[] {
   const out: ReactNode[] = [];
