@@ -1,7 +1,9 @@
 /**
  * Sign-in with Google Identity Platform (ADR 0005): the Firebase Auth SDK
- * signs the person in with Google in a popup, and the resulting ID token is
- * the bearer token every API call carries. Identity Platform keeps the OAuth
+ * signs the person in with Google by redirect (the whole page goes to Google
+ * and comes back; popups are unreliable on mobile browsers), and the
+ * resulting ID token is the bearer token every API call carries. The auth
+ * domain is Workbench's own host, whose nginx proxies the handler at /__/. Identity Platform keeps the OAuth
  * client secret; the browser holds only the public web API key.
  *
  * The SDK is loaded on demand, so builds that use generic OIDC never fetch it.
@@ -35,8 +37,14 @@ export function watchIdentityPlatform(cfg: WorkbenchConfig, onToken: (token: str
   let stop: (() => void) | undefined;
   let stopped = false;
   void getAuthFor(cfg).then(async (a) => {
-    const { onIdTokenChanged } = await import("firebase/auth");
+    const { getRedirectResult, onIdTokenChanged } = await import("firebase/auth");
     if (stopped) return;
+    // Completes a sign-in that redirected back here; the user then arrives
+    // through onIdTokenChanged. A failed redirect leaves the person signed out.
+    getRedirectResult(a).catch((e: unknown) => {
+      console.error("Sign-in did not complete", e);
+      onToken(undefined);
+    });
     stop = onIdTokenChanged(a, (user: User | null) => {
       if (!user) return onToken(undefined);
       user.getIdToken().then(onToken, () => onToken(undefined));
@@ -48,12 +56,13 @@ export function watchIdentityPlatform(cfg: WorkbenchConfig, onToken: (token: str
   };
 }
 
+/** Redirects to Google; the browser comes back to the page it left. */
 export async function signInWithIdentityPlatform(cfg: WorkbenchConfig): Promise<void> {
   const a = await getAuthFor(cfg);
-  const { GoogleAuthProvider, signInWithPopup } = await import("firebase/auth");
+  const { GoogleAuthProvider, signInWithRedirect } = await import("firebase/auth");
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account" });
-  await signInWithPopup(a, provider);
+  await signInWithRedirect(a, provider);
 }
 
 export async function signOutOfIdentityPlatform(cfg: WorkbenchConfig): Promise<void> {
