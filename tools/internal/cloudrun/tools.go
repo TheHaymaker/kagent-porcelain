@@ -525,6 +525,14 @@ func (c *Client) readLogs(ctx context.Context, _ mcpx.Call, in ReadLogsIn) (Read
 				if m, ok := jp["message"].(string); ok {
 					msg = m
 				}
+				// The templates log exceptions as "unhandled error" with the
+				// traceback beside it; its end says what failed.
+				for _, k := range []string{"stack_trace", "exception", "stack"} {
+					if st, ok := jp[k].(string); ok && st != "" {
+						msg = strings.TrimSpace(msg + "\n" + tail(st, MaxLogEntryBytes/2))
+						break
+					}
+				}
 			}
 			if msg == "" {
 				msg = string(e.JSONPayload)
@@ -810,4 +818,16 @@ func (c *Client) editIAPAccess(ctx context.Context, name, member, action string)
 		}
 	}
 	return out, nil
+}
+
+// tail keeps the last n bytes of s, at a line boundary when it can.
+func tail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	s = s[len(s)-n:]
+	if i := strings.IndexByte(s, '\n'); i >= 0 && i < len(s)-1 {
+		s = s[i+1:]
+	}
+	return "…" + s
 }

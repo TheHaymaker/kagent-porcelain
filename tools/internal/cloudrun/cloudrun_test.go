@@ -374,12 +374,17 @@ func TestReadLogs(t *testing.T) {
 		{"timestamp": "t1", "severity": "ERROR", "textPayload": strings.Repeat("x", 5000), "resource": map[string]any{"labels": map[string]any{"revision_name": "wb-preview-my-app-00001-aaa"}}},
 		{"timestamp": "t2", "severity": "INFO", "jsonPayload": map[string]any{"message": "hello"}},
 		{"timestamp": "t3", "httpRequest": map[string]any{"requestMethod": "GET", "requestUrl": "/", "status": 500, "latency": "0.1s"}},
+		{"timestamp": "t4", "severity": "ERROR", "jsonPayload": map[string]any{"message": "unhandled error",
+			"stack_trace": strings.Repeat("  frame\n", 400) + "google.api_core.exceptions.PermissionDenied: 403 Missing or insufficient permissions."}},
 	}
 	var out ReadLogsOut
 	mcpxtest.MustOK(t, cs, "cloudrun_read_logs", map[string]any{
-		"service": "my-app", "since_minutes": 30, "min_severity": "warning", "contains": `x" OR resource.labels.service_name="other`, "limit": 3,
+		"service": "my-app", "since_minutes": 30, "min_severity": "warning", "contains": `x" OR resource.labels.service_name="other`, "limit": 4,
 	}, &out)
-	if len(out.Entries) != 3 || !out.Truncated || len(out.Entries[0].Message) > MaxLogEntryBytes+20 || out.Entries[1].Message != "hello" || !strings.Contains(out.Entries[2].Message, "-> 500") {
+	if len(out.Entries) != 4 || !strings.HasPrefix(out.Entries[3].Message, "unhandled error\n…") || !strings.HasSuffix(out.Entries[3].Message, "insufficient permissions.") {
+		t.Fatalf("the traceback's end should follow the message: %+v", out.Entries)
+	}
+	if !out.Truncated || len(out.Entries[0].Message) > MaxLogEntryBytes+20 || out.Entries[1].Message != "hello" || !strings.Contains(out.Entries[2].Message, "-> 500") {
 		t.Fatalf("unexpected %+v", out)
 	}
 	r, _ := f.find(http.MethodPost, "/v2/entries:list")
@@ -390,7 +395,7 @@ func TestReadLogs(t *testing.T) {
 			t.Errorf("filter lacks %s: %s", want, filter)
 		}
 	}
-	if r.Body["pageSize"] != float64(3) {
+	if r.Body["pageSize"] != float64(4) {
 		t.Errorf("pageSize %v", r.Body["pageSize"])
 	}
 	mcpxtest.MustErr(t, cs, "cloudrun_read_logs", map[string]any{"service": "my-app", "min_severity": "LOUD"}, "min_severity")

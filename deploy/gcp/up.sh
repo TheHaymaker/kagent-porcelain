@@ -1071,8 +1071,20 @@ if not found:
 ' || true
     echo "    recent errors (emails masked):"
     gc logging read "resource.type=cloud_run_revision AND resource.labels.service_name=$svc AND severity>=ERROR" \
-      --freshness=3h --limit=40 --order=asc --format='value(textPayload,jsonPayload.message)' 2>&1 |
-      sed -E 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/<email>/g' | cut -c1-300 | tail -40 | sed 's/^/      /' || true
+      --freshness=3h --limit=3 --format=json 2>&1 | python3 -c '
+import json, re, sys
+raw = sys.stdin.read()
+try:
+    entries = json.loads(raw or "[]")
+except ValueError:
+    print(raw[-400:]); sys.exit(0)
+for e in entries:
+    jp = e.get("jsonPayload") or {}
+    text = e.get("textPayload") or jp.get("message", "")
+    st = jp.get("stack_trace", "")
+    out = (e.get("timestamp", "")[11:19] + " " + text + ("\n" + "\n".join(st.splitlines()[-12:]) if st else ""))
+    print(re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", "<email>", out))
+' | sed 's/^/      /' || true
   done
 }
 
