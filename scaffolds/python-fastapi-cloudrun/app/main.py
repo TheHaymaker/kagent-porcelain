@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.identity import User, current_user
 from app.logging_config import configure_logging, trace_context, trace_from_headers
-from app.store import MemoryStore
+from app.store import Store, make_store
 
 APP_NAME = "workbench-app"
 BASE_DIR = Path(__file__).resolve().parent
@@ -27,9 +27,9 @@ log = logging.getLogger(APP_NAME)
 UserDep = Annotated[User, Depends(current_user)]
 
 
-def create_app(store: MemoryStore | None = None) -> FastAPI:
+def create_app(store: Store | None = None) -> FastAPI:
     app = FastAPI(title=APP_NAME, docs_url=None, redoc_url=None, openapi_url=None)
-    app.state.store = store or MemoryStore()
+    app.state.store = store or make_store(APP_NAME)
     templates = Jinja2Templates(directory=BASE_DIR / "templates")
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -100,7 +100,7 @@ def create_app(store: MemoryStore | None = None) -> FastAPI:
         return board(request)
 
     @app.post("/items/{item_id}/toggle", response_class=HTMLResponse)
-    def toggle_item(request: Request, item_id: int, user: UserDep):
+    def toggle_item(request: Request, item_id: str, user: UserDep):
         try:
             app.state.store.toggle(item_id)
         except KeyError:

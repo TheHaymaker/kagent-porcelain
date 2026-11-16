@@ -50,6 +50,6 @@ runtimeServiceAccount:
 state:
   default: in-memory (resets on every restart; fine for demos, not for real data)
   persistent: >-
-    For data that must survive restarts, add Firestore in Native mode
-    (firestore.googleapis.com) and grant roles/datastore.user to the runtime
-    service account on the app's own database only; see IAM.md.
+    Firestore in Native mode, built in: set DEFAULT_STORE = "firestore" in
+    app/store.py. Uses the project's (default) database and collections named
+    after the app; the runtime identity needs roles/datastore.user (IAM.md).
