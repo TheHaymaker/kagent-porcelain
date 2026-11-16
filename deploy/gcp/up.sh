@@ -1028,8 +1028,48 @@ for line in sys.stdin:
     print("  %s %s: %s" % (e.get("time", "")[11:19], e.get("tool"), e.get("error", "")[:600]))
 ' | tail -12 || true
   done
+  say "cloudrun-mcp: calls that changed something in the last 3 hours"
+  kubectl -n workbench-tools logs deploy/cloudrun-mcp --since=3h 2>&1 |
+    grep '"read_only":false' | python3 -c '
+import json, sys
+for line in sys.stdin:
+    try:
+        e = json.loads(line)
+    except ValueError:
+        continue
+    print("  %s %s %s" % (e.get("time", "")[11:19], e.get("tool"), e.get("outcome")))
+' | tail -12 || true
   say "Preview services"
   gc run services list --region "$REGION" --format 'table(metadata.name,status.conditions[0].status,status.conditions[0].message)' 2>&1 | head -20 || true
+  # Who may open each preview through IAP. Emails are masked (the Actions log
+  # is public); an admin from WORKBENCH_ADMINS is named as such.
+  local svc
+  for svc in $(gc run services list --region "$REGION" --format 'value(metadata.name)' 2>/dev/null | grep '^wb-preview-'); do
+    echo "  $svc: iap=$(gc run services describe "$svc" --region "$REGION" --format 'value(metadata.annotations["run.googleapis.com/iap-enabled"])' 2>/dev/null || echo '?')"
+    gc iap web get-iam-policy --resource-type=cloud-run --service="$svc" --region="$REGION" --format=json 2>&1 |
+      ADMINS="${WORKBENCH_ADMINS:-}" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+try:
+    pol = json.loads(raw)
+except ValueError:
+    print("    could not read the IAP policy: " + raw.strip().splitlines()[-1][:300] if raw.strip() else "    empty answer")
+    sys.exit(0)
+admins = {a.strip().lower() for a in os.environ.get("ADMINS", "").split(",") if a.strip()}
+def mask(m):
+    kind, _, who = m.partition(":")
+    if who.lower() in admins:
+        return kind + ":<a workbench admin>"
+    user, _, dom = who.partition("@")
+    return "%s:%s…@%s" % (kind, user[:2], dom) if dom else m
+found = False
+for b in pol.get("bindings", []):
+    print("    %s%s: %s" % (b.get("role"), " (conditional)" if b.get("condition") else "", ", ".join(mask(m) for m in b.get("members", []))))
+    found = True
+if not found:
+    print("    no bindings: nobody may open it")
+' || true
+  done
 }
 
 phase_status() {
