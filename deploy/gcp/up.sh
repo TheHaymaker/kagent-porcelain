@@ -1105,6 +1105,40 @@ phase_status() {
   kubeconfig
   kubectl -n "$NAMESPACE" get pods,svc
   kubectl get agents -A 2>/dev/null || true
+  # Capacity: what the nodes cost for and what the pods reserve and use.
+  say "Node pools"
+  gc container node-pools list --cluster "$CLUSTER" --zone "$ZONE" \
+    --format 'table(name,config.machineType,initialNodeCount,autoscaling.enabled,config.spot,config.preemptible)' || true
+  say "Reserved (requests and limits) per node"
+  kubectl describe nodes | grep -E '^Name:|^  (cpu|memory) ' || true
+  say "Actually used now"
+  kubectl top nodes 2>&1 || true
+  say "Heaviest pods by CPU and memory reserved"
+  kubectl get pods -A -o json | python3 -c '
+import json, sys
+def cpu(v):
+    return float(v[:-1]) / 1000 if v.endswith("m") else float(v)
+def mem(v):
+    units = {"Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "K": 1e3, "M": 1e6, "G": 1e9}
+    for u, f in units.items():
+        if v.endswith(u):
+            return float(v[:-len(u)]) * f / 2**30
+    return float(v) / 2**30
+rows = []
+for p in json.load(sys.stdin)["items"]:
+    if p["status"].get("phase") not in ("Running", "Pending"):
+        continue
+    c = m = 0.0
+    for k in p["spec"]["containers"]:
+        r = (k.get("resources") or {}).get("requests") or {}
+        c += cpu(r.get("cpu", "0")); m += mem(r.get("memory", "0"))
+    rows.append((c, m, p["metadata"]["namespace"] + "/" + p["metadata"]["name"]))
+rows.sort(reverse=True)
+print("  %d pods; %.2f vCPU and %.1f GiB requested in total" % (len(rows), sum(r[0] for r in rows), sum(r[1] for r in rows)))
+for c, m, n in rows[:15]:
+    print("  %5.2f vCPU %6.2f GiB  %s" % (c, m, n))
+' || true
+  kubectl top pods -A --sort-by=cpu 2>/dev/null | head -15 || true
 }
 
 phase_down() {
