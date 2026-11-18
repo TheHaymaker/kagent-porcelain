@@ -1,0 +1,7 @@
+{
+  "oidcIssuer": "https://accounts.example.com",
+  "oidcClientId": "workbench-web",
+  "apiBaseUrl": "/api",
+  "defaultAgent": "workbench/builder",
+  "mock": true
+}

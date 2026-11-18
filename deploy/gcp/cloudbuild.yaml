@@ -1,0 +1,57 @@
+# Builds every Workbench image in Cloud Build, so no local Docker is needed.
+#   gcloud builds submit --config deploy/gcp/cloudbuild.yaml \
+#     --substitutions=_REGISTRY=REGION-docker.pkg.dev/PROJECT/workbench,_TAG=TAG .
+substitutions:
+  _REGISTRY: ""
+  _TAG: dev
+options:
+  machineType: E2_HIGHCPU_8
+  dynamicSubstitutions: true
+timeout: 3600s
+steps:
+  - id: server
+    name: gcr.io/cloud-builders/docker
+    args: [build, -t, "${_REGISTRY}/workbench-server:${_TAG}", server]
+    waitFor: ["-"]
+  - id: mockllm
+    name: gcr.io/cloud-builders/docker
+    args: [build, --build-arg, CMD=workbench-mockllm, -t, "${_REGISTRY}/workbench-mockllm:${_TAG}", server]
+    waitFor: ["-"]
+  - id: web
+    name: gcr.io/cloud-builders/docker
+    args: [build, -f, web/Dockerfile, -t, "${_REGISTRY}/workbench-web:${_TAG}", "."]
+    waitFor: ["-"]
+  - id: gitlab-mcp
+    name: gcr.io/cloud-builders/docker
+    args: [build, --build-arg, SERVER=gitlab-mcp, -t, "${_REGISTRY}/gitlab-mcp:${_TAG}", tools]
+    waitFor: ["-"]
+  - id: cloudrun-mcp
+    name: gcr.io/cloud-builders/docker
+    args: [build, --build-arg, SERVER=cloudrun-mcp, -t, "${_REGISTRY}/cloudrun-mcp:${_TAG}", tools]
+    waitFor: ["-"]
+  - id: artifactregistry-mcp
+    name: gcr.io/cloud-builders/docker
+    args: [build, --build-arg, SERVER=artifactregistry-mcp, -t, "${_REGISTRY}/artifactregistry-mcp:${_TAG}", tools]
+    waitFor: ["-"]
+  - id: build-mcp
+    name: gcr.io/cloud-builders/docker
+    args: [build, --build-arg, SERVER=build-mcp, -t, "${_REGISTRY}/build-mcp:${_TAG}", tools]
+    waitFor: ["-"]
+  - id: bigquery-mcp
+    name: gcr.io/cloud-builders/docker
+    args: [build, --build-arg, SERVER=bigquery-mcp, -t, "${_REGISTRY}/bigquery-mcp:${_TAG}", tools]
+    waitFor: ["-"]
+  - id: waker
+    name: gcr.io/cloud-builders/docker
+    args: [build, --build-arg, SERVER=waker, -t, "${_REGISTRY}/waker:${_TAG}", tools]
+    waitFor: ["-"]
+images:
+  - "${_REGISTRY}/workbench-server:${_TAG}"
+  - "${_REGISTRY}/workbench-mockllm:${_TAG}"
+  - "${_REGISTRY}/workbench-web:${_TAG}"
+  - "${_REGISTRY}/gitlab-mcp:${_TAG}"
+  - "${_REGISTRY}/cloudrun-mcp:${_TAG}"
+  - "${_REGISTRY}/artifactregistry-mcp:${_TAG}"
+  - "${_REGISTRY}/bigquery-mcp:${_TAG}"
+  - "${_REGISTRY}/build-mcp:${_TAG}"
+  - "${_REGISTRY}/waker:${_TAG}"

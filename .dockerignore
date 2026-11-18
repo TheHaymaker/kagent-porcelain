@@ -1,0 +1,8 @@
+# Docker builds that use the repository root as context (web/Dockerfile).
+**/node_modules
+**/dist
+web/docs
+**/*.png
+.git
+deploy/gcp/.state
+server/bin

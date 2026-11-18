@@ -1,0 +1,2 @@
+{"version":"v0.9.1","createSurface":{"surfaceId":"approval-1","catalogId":"https://workbench.dev/catalogs/workbench/v1/catalog.json"}}
+{"version":"v0.9.1","updateComponents":{"surfaceId":"approval-1","components":[{"id":"root","component":"ApprovalCard","approvalId":"apr_01","title":"Promote expense-tracker to production","summary":"Revision expense-tracker-00007 has passed its checks in preview."}]}}

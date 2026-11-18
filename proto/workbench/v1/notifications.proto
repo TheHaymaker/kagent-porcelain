@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package workbench.v1;
+
+import "google/protobuf/timestamp.proto";
+import "workbench/v1/common.proto";
+
+option go_package = "github.com/thehaymaker/kagent-porcelain/server/gen/workbench/v1;workbenchv1";
+
+// NotificationService tells people when an agent needs them or finishes, on
+// whichever surfaces they have chosen.
+service NotificationService {
+  rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse);
+  rpc MarkRead(MarkReadRequest) returns (MarkReadResponse);
+  rpc GetPreferences(GetPreferencesRequest) returns (GetPreferencesResponse);
+  rpc SetPreferences(SetPreferencesRequest) returns (SetPreferencesResponse);
+  // RegisterDevice records a mobile push token for the caller.
+  rpc RegisterDevice(RegisterDeviceRequest) returns (RegisterDeviceResponse);
+}
+
+enum Channel {
+  CHANNEL_UNSPECIFIED = 0;
+  CHANNEL_IN_APP = 1;
+  CHANNEL_EMAIL = 2;
+  CHANNEL_TEAMS = 3;
+  CHANNEL_MOBILE_PUSH = 4;
+}
+
+enum NotificationKind {
+  NOTIFICATION_KIND_UNSPECIFIED = 0;
+  NOTIFICATION_KIND_APPROVAL_NEEDED = 1;
+  NOTIFICATION_KIND_APPROVAL_DECIDED = 2;
+  NOTIFICATION_KIND_INPUT_NEEDED = 3;
+  NOTIFICATION_KIND_TASK_FINISHED = 4;
+  NOTIFICATION_KIND_TASK_FAILED = 5;
+  NOTIFICATION_KIND_APP_PROMOTED = 6;
+  NOTIFICATION_KIND_LIMIT_REACHED = 7;
+}
+
+message Notification {
+  string id = 1;
+  NotificationKind kind = 2;
+  string title = 3;
+  string body = 4;
+  // A path within the web app, e.g. /c/<session>, /approvals/<id>.
+  string link = 5;
+  string session_id = 6;
+  string approval_id = 7;
+  string app_id = 8;
+  bool read = 9;
+  google.protobuf.Timestamp created_at = 10;
+}
+
+message ListNotificationsRequest {
+  bool unread_only = 1;
+  PageRequest page = 2;
+}
+
+message ListNotificationsResponse {
+  repeated Notification notifications = 1;
+  int32 unread_count = 2;
+  PageResponse page = 3;
+}
+
+message MarkReadRequest {
+  repeated string ids = 1;
+  bool all = 2;
+}
+
+message MarkReadResponse {}
+
+message Preference {
+  NotificationKind kind = 1;
+  repeated Channel channels = 2;
+}
+
+message GetPreferencesRequest {}
+
+message GetPreferencesResponse {
+  repeated Preference preferences = 1;
+}
+
+message SetPreferencesRequest {
+  repeated Preference preferences = 1;
+}
+
+message SetPreferencesResponse {
+  repeated Preference preferences = 1;
+}
+
+enum Platform {
+  PLATFORM_UNSPECIFIED = 0;
+  PLATFORM_IOS = 1;
+  PLATFORM_ANDROID = 2;
+}
+
+message RegisterDeviceRequest {
+  Platform platform = 1;
+  string push_token = 2;
+  string device_name = 3;
+}
+
+message RegisterDeviceResponse {}

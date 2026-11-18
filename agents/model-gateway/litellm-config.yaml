@@ -1,0 +1,31 @@
+# LiteLLM proxy configuration for the Workbench model gateway.
+#
+# Clients (Claude Code inside builder Actors) speak the Anthropic Messages API
+# to this proxy (POST /v1/messages, /v1/messages/count_tokens). The proxy calls
+# Claude on Vertex AI with the pod's Workload Identity, so no Google credential
+# exists anywhere else.
+model_list:
+  # The alias the ModelConfig names. On Vertex AI current Claude models use the
+  # bare first-party model id.
+  - model_name: claude-opus-5-5
+    litellm_params:
+      model: vertex_ai/claude-opus-5-5
+      vertex_project: os.environ/VERTEX_PROJECT
+      vertex_location: os.environ/VERTEX_LOCATION
+
+litellm_settings:
+  # Long agent turns stream for minutes.
+  request_timeout: 900
+  num_retries: 2
+  # Do not log prompts or completions; the builder sees requesters' data.
+  turn_off_message_logging: true
+  json_logs: true
+
+general_settings:
+  # Admin key, used only by platform operators to mint virtual keys.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Virtual keys, budgets and spend tracking need Postgres.
+  database_url: os.environ/DATABASE_URL
+  # Reject requests without a valid virtual key (x-api-key or Authorization).
+  allow_requests_on_db_unavailable: false
+  disable_spend_logs: false

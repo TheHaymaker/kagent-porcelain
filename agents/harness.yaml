@@ -1,0 +1,75 @@
+# Harness: HOW the builder runs. Platform-owned; agent authors only reference it.
+#
+# Claude harness (spec.claude) runs Claude Code natively in a Substrate Actor.
+# Claude Code's built-in tools (Bash, Read, Edit, ...) execute inside the Actor,
+# so the Actor image must carry the toolchains the scaffolds need. We therefore
+# override workload.image with agents/image (target `builder`), which is the
+# kagent Claude harness image plus git/node/python/uv/go.
+#
+# Constraints taken from go/api/v1alpha3/harness_types.go:
+#   - exactly one of kagent|codex|claude|byo
+#   - workload.image must be pinned by @sha256 digest
+#   - claude harnesses reject workload.command / workload.args
+#   - env entries are literal values only (credentialRef is deferred), and the
+#     Claude compiler rejects names it owns (ANTHROPIC_*, CLAUDE_CODE_*, ...)
+#   - substrate.workerPoolRef + snapshotPolicy.location are required
+apiVersion: api.kagent.dev/v1alpha3
+kind: Harness
+metadata:
+  name: workbench-claude
+  namespace: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  claude: {}
+  workload:
+    # Built from agents/image/Dockerfile --target builder. Replace the digest
+    # with the one `docker buildx build --push` prints (see agents/README.md).
+    image: europe-docker.pkg.dev/workbench-platform/workbench/builder-harness@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  env:
+    # git pushes to GitLab over HTTPS. The egress gateway REPLACES an existing
+    # Authorization header for gitlab.example.com with the Secret from the
+    # `workbench-gitlab` EgressPolicy; it never adds a missing one, and git only
+    # sends credentials after a 401 unless told to. This makes git always send
+    # the inert placeholder, so the real token never enters the Actor.
+    - name: GIT_CONFIG_COUNT
+      value: "3"
+    - name: GIT_CONFIG_KEY_0
+      value: http.https://gitlab.example.com/.extraHeader
+    - name: GIT_CONFIG_VALUE_0
+      value: "Authorization: Basic kagent-credential-injected"
+    - name: GIT_CONFIG_KEY_1
+      value: user.name
+    - name: GIT_CONFIG_VALUE_1
+      value: Workbench Builder
+    - name: GIT_CONFIG_KEY_2
+      value: user.email
+    - name: GIT_CONFIG_VALUE_2
+      value: workbench-builder@noreply.example.com
+    # Substrate projects the egress gateway's trust bundle and sets
+    # SSL_CERT_FILE, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS, CURL_CA_BUNDLE and
+    # GIT_SSL_CAINFO itself (those names are reserved; uv, npm, go and git honour
+    # them). pip uses its bundled certifi unless told otherwise:
+    - name: PIP_CERT
+      value: /run/kagent/egress/trust-bundle.pem
+    # Package installs go through the registry grants in workbench-packages.
+    - name: npm_config_registry
+      value: https://registry.npmjs.org/
+    - name: GOPROXY
+      value: https://proxy.golang.org
+    - name: GOFLAGS
+      value: -modcacherw
+    # The builder has no cloud credentials and no gcloud; say so to tools that probe.
+    - name: CLOUDSDK_CORE_DISABLE_PROMPTS
+      value: "1"
+    # The golden-path scaffolds are baked into the image (agents/image/Dockerfile
+    # copies scaffolds/), so a build never depends on fetching them.
+    - name: WORKBENCH_SCAFFOLDS_DIR
+      value: /opt/workbench/scaffolds
+    - name: WORKBENCH_GITLAB_GROUP_URL
+      value: https://gitlab.example.com/workbench-apps
+  substrate:
+    workerPoolRef:
+      name: kagent-default
+    snapshotPolicy:
+      location: s3://ate-snapshots/workbench-builders/

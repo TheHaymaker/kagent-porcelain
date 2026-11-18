@@ -1,0 +1,139 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: API contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Breaking-change checks need an API on the base branch to compare
+      # against; the first PR into main has none.
+      - name: Base branch has an API
+        id: base
+        run: |
+          if git cat-file -e "origin/${{ github.base_ref || 'main' }}:proto/workbench/v1" 2>/dev/null; then
+            echo "has_api=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_api=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: bufbuild/buf-action@v1
+        with:
+          lint: true
+          format: false
+          breaking: ${{ github.event_name == 'pull_request' && steps.base.outputs.has_api == 'true' }}
+          breaking_against: "${{ github.event.repository.clone_url }}#branch=${{ github.base_ref }}"
+          pr_comment: false
+          push: false
+      - name: Catalogue copy is current
+        run: cmp catalogue/catalog.json server/internal/components/catalog.json
+
+  server:
+    name: Server
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: workbench_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      WORKBENCH_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/workbench_test?sslmode=disable
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: Binary builds and validates the example configuration
+        run: |
+          go build -o bin/workbench ./cmd/workbench
+          mkdir -p /tmp/smoke/secrets && cd /tmp/smoke
+          cp $GITHUB_WORKSPACE/deploy/controller.example.yaml controller.yaml
+          cp $GITHUB_WORKSPACE/deploy/workbench.example.yaml workbench.yaml
+          echo "$WORKBENCH_TEST_DATABASE_URL" | tee secrets/database-owner-url > secrets/database-readwrite-url
+          openssl genpkey -algorithm ED25519 -out secrets/push-private-key.pem
+          $GITHUB_WORKSPACE/server/bin/workbench --config controller.yaml --workbench-config workbench.yaml --check-config
+
+  tools:
+    name: GCP tool servers
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  web:
+    name: Web app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  scaffolds:
+    name: Scaffold ${{ matrix.scaffold }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scaffold: [python-fastapi-cloudrun, streamlit-bigquery, node-react-cloudrun]
+    defaults:
+      run:
+        working-directory: scaffolds/${{ matrix.scaffold }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: make lint test
+
+  deploy:
+    name: Helm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint the Workbench chart with the example configuration
+        run: |
+          python3 -c "import yaml; yaml.safe_dump({'config': yaml.safe_load(open('deploy/workbench.example.yaml'))}, open('/tmp/values.yaml','w'))"
+          helm lint deploy/helm/workbench -f /tmp/values.yaml
+          helm template wb deploy/helm/workbench -f /tmp/values.yaml > /dev/null

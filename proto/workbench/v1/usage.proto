@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package workbench.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/thehaymaker/kagent-porcelain/server/gen/workbench/v1;workbenchv1";
+
+// UsageService reports spend and holds per-person and per-team limits. Usage
+// is metered at the model gateway, which sees every call whatever the runtime.
+service UsageService {
+  rpc GetUsageSummary(GetUsageSummaryRequest) returns (GetUsageSummaryResponse);
+  rpc ListLimits(ListLimitsRequest) returns (ListLimitsResponse);
+  rpc SetLimit(SetLimitRequest) returns (SetLimitResponse);
+}
+
+enum LimitSubject {
+  LIMIT_SUBJECT_UNSPECIFIED = 0;
+  LIMIT_SUBJECT_PERSON = 1;
+  LIMIT_SUBJECT_TEAM = 2;
+}
+
+message UsageLine {
+  // Grouping key: a person, team, app or model, depending on the request.
+  string key = 1;
+  int64 input_tokens = 2;
+  int64 output_tokens = 3;
+  int64 cost_cents = 4;
+}
+
+enum UsageGroupBy {
+  USAGE_GROUP_BY_UNSPECIFIED = 0;
+  USAGE_GROUP_BY_PERSON = 1;
+  USAGE_GROUP_BY_APP = 2;
+  USAGE_GROUP_BY_MODEL = 3;
+  USAGE_GROUP_BY_DAY = 4;
+}
+
+message GetUsageSummaryRequest {
+  google.protobuf.Timestamp since = 1;
+  google.protobuf.Timestamp until = 2;
+  UsageGroupBy group_by = 3;
+  // Only the caller's own usage. Platform engineers may see everyone's.
+  bool mine = 4;
+}
+
+message GetUsageSummaryResponse {
+  repeated UsageLine lines = 1;
+  int64 total_cost_cents = 2;
+}
+
+message Limit {
+  LimitSubject subject = 1;
+  // Principal ID or group name.
+  string subject_id = 2;
+  int64 monthly_cents = 3;
+  int64 spent_cents_mtd = 4;
+}
+
+message ListLimitsRequest {}
+
+message ListLimitsResponse {
+  repeated Limit limits = 1;
+}
+
+message SetLimitRequest {
+  Limit limit = 1;
+}
+
+message SetLimitResponse {
+  Limit limit = 1;
+}

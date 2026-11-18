@@ -1,0 +1,300 @@
+# Workbench tool servers for a GKE test cluster, rendered by deploy/gcp/up.sh
+# (Python string.Template). Each pod runs as its own Kubernetes service
+# account; up.sh grants those identities their Google Cloud roles directly
+# through Workload Identity. The RemoteMCPServers live in the agents'
+# namespace, so agents there reference them by name.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: workbench-tools
+  labels: {app.kubernetes.io/part-of: workbench}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitlab-mcp
+  namespace: workbench-tools
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitlab-mcp
+  namespace: workbench-tools
+  labels: {app.kubernetes.io/name: gitlab-mcp, app.kubernetes.io/part-of: workbench}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: gitlab-mcp}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: gitlab-mcp, app.kubernetes.io/part-of: workbench}
+    spec:
+      serviceAccountName: gitlab-mcp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: server
+          image: ${REGISTRY}/gitlab-mcp:${TAG}
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - {name: LISTEN_ADDR, value: ":8080"}
+            - {name: REQUIRE_REQUESTER, value: "false"}
+            - {name: GITLAB_BASE_URL, value: "${GITLAB_BASE_URL}"}
+            - {name: GITLAB_ALLOWED_GROUP, value: "${GITLAB_ALLOWED_GROUP}"}
+            - {name: GITLAB_TEMPLATE_GROUP, value: "${GITLAB_TEMPLATE_GROUP}"}
+            - {name: GITLAB_TOKEN_FILE, value: "/var/run/secrets/workbench/gitlab/token"}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: gitlab-token, mountPath: /var/run/secrets/workbench/gitlab, readOnly: true}
+      volumes:
+        - name: gitlab-token
+          secret: {secretName: gitlab-mcp-token, defaultMode: 0440}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab-mcp
+  namespace: workbench-tools
+spec:
+  selector: {app.kubernetes.io/name: gitlab-mcp}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: gitlab-mcp
+  namespace: ${NAMESPACE}
+  labels: {app.kubernetes.io/part-of: workbench}
+spec:
+  description: "Workbench GitLab: scaffold projects, branches, commits, merge requests and pipeline status in the Workbench apps group"
+  protocol: STREAMABLE_HTTP
+  url: http://gitlab-mcp.workbench-tools.svc.cluster.local:8080/mcp
+  timeout: 60s
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: build-mcp
+  namespace: workbench-tools
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: build-mcp
+  namespace: workbench-tools
+  labels: {app.kubernetes.io/name: build-mcp, app.kubernetes.io/part-of: workbench}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: build-mcp}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: build-mcp, app.kubernetes.io/part-of: workbench}
+    spec:
+      serviceAccountName: build-mcp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: server
+          image: ${REGISTRY}/build-mcp:${TAG}
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - {name: LISTEN_ADDR, value: ":8080"}
+            - {name: REQUIRE_REQUESTER, value: "false"}
+            - {name: GITLAB_BASE_URL, value: "${GITLAB_BASE_URL}"}
+            - {name: GITLAB_ALLOWED_GROUP, value: "${GITLAB_ALLOWED_GROUP}"}
+            - {name: GITLAB_TEMPLATE_GROUP, value: "${GITLAB_TEMPLATE_GROUP}"}
+            - {name: GITLAB_TOKEN_FILE, value: "/var/run/secrets/workbench/gitlab/token"}
+            - {name: BUILD_PROJECT, value: "${PROJECT_ID}"}
+            - {name: BUILD_LOCATION, value: "${REGION}"}
+            - {name: BUILD_REPOSITORY, value: "builds"}
+            - {name: BUILD_BUCKET, value: "${BUILD_BUCKET}"}
+            - {name: BUILD_SERVICE_ACCOUNT, value: "${BUILD_SA}"}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: gitlab-token, mountPath: /var/run/secrets/workbench/gitlab, readOnly: true}
+      volumes:
+        - name: gitlab-token
+          secret: {secretName: gitlab-mcp-token, defaultMode: 0440}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: build-mcp
+  namespace: workbench-tools
+spec:
+  selector: {app.kubernetes.io/name: build-mcp}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: build-mcp
+  namespace: ${NAMESPACE}
+  labels: {app.kubernetes.io/part-of: workbench}
+spec:
+  description: "Build a Workbench app's container image from its GitLab project with Cloud Build"
+  protocol: STREAMABLE_HTTP
+  url: http://build-mcp.workbench-tools.svc.cluster.local:8080/mcp
+  timeout: 60s
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudrun-mcp
+  namespace: workbench-tools
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudrun-mcp
+  namespace: workbench-tools
+  labels: {app.kubernetes.io/name: cloudrun-mcp, app.kubernetes.io/part-of: workbench}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: cloudrun-mcp}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: cloudrun-mcp, app.kubernetes.io/part-of: workbench}
+    spec:
+      serviceAccountName: cloudrun-mcp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: server
+          image: ${REGISTRY}/cloudrun-mcp:${TAG}
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - {name: LISTEN_ADDR, value: ":8080"}
+            - {name: REQUIRE_REQUESTER, value: "false"}
+            - {name: CLOUDRUN_PREVIEW_PROJECT, value: "${PROJECT_ID}"}
+            - {name: CLOUDRUN_REGION, value: "${REGION}"}
+            - {name: CLOUDRUN_IMAGE_PREFIX, value: "${REGION}-docker.pkg.dev/${PROJECT_ID}/builds/"}
+            - {name: CLOUDRUN_RUNTIME_SERVICE_ACCOUNT, value: "${PREVIEW_SA}"}
+            - {name: CLOUDRUN_MAX_INSTANCES, value: "2"}
+            - {name: CLOUDRUN_ALLOW_PUBLIC_INVOKER, value: "false"}
+            - {name: CLOUDRUN_DEPLOY_WAIT, value: "3m"}
+            - {name: CLOUDRUN_IAP, value: "true"}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudrun-mcp
+  namespace: workbench-tools
+spec:
+  selector: {app.kubernetes.io/name: cloudrun-mcp}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: cloudrun-mcp
+  namespace: ${NAMESPACE}
+  labels: {app.kubernetes.io/part-of: workbench}
+spec:
+  description: "Workbench Cloud Run PREVIEW deployments (wb-preview-* services in the preview project only; no production deploys)"
+  protocol: STREAMABLE_HTTP
+  url: http://cloudrun-mcp.workbench-tools.svc.cluster.local:8080/mcp
+  timeout: 300s
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: artifactregistry-mcp
+  namespace: workbench-tools
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: artifactregistry-mcp
+  namespace: workbench-tools
+  labels: {app.kubernetes.io/name: artifactregistry-mcp, app.kubernetes.io/part-of: workbench}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: artifactregistry-mcp}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: artifactregistry-mcp, app.kubernetes.io/part-of: workbench}
+    spec:
+      serviceAccountName: artifactregistry-mcp
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: server
+          image: ${REGISTRY}/artifactregistry-mcp:${TAG}
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - {name: LISTEN_ADDR, value: ":8080"}
+            - {name: REQUIRE_REQUESTER, value: "false"}
+            - {name: AR_PROJECT, value: "${PROJECT_ID}"}
+            - {name: AR_LOCATION, value: "${REGION}"}
+            - {name: AR_REPOSITORY, value: "builds"}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: artifactregistry-mcp
+  namespace: workbench-tools
+spec:
+  selector: {app.kubernetes.io/name: artifactregistry-mcp}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: artifactregistry-mcp
+  namespace: ${NAMESPACE}
+  labels: {app.kubernetes.io/part-of: workbench}
+spec:
+  description: "Read-only view of the Workbench builds repository: images, tags and digests"
+  protocol: STREAMABLE_HTTP
+  url: http://artifactregistry-mcp.workbench-tools.svc.cluster.local:8080/mcp
+  timeout: 30s

@@ -1,0 +1,13 @@
+# BuildKit reads <Dockerfile>.dockerignore for this Dockerfile. The build context
+# is the repository root; send only what the image copies, without local build
+# artifacts from running the scaffolds' tests.
+**
+!agents/image/install-toolchain.sh
+!scaffolds/**
+scaffolds/**/.venv
+scaffolds/**/node_modules
+scaffolds/**/dist
+scaffolds/**/__pycache__
+scaffolds/**/.pytest_cache
+scaffolds/**/.ruff_cache
+scaffolds/**/.uv-cache

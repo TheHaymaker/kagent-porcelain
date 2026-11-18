@@ -1,0 +1,61 @@
+# Egress: deny by default.
+#
+# A Substrate Actor can reach nothing except what kagent grants it. For the
+# builder Agent that is (egress-policies.md, configuration-and-compilation.md):
+#   1. inferred, always on: the ModelConfig origin (model gateway), every bound
+#      RemoteMCPServer origin (workbench-api, gitlab-mcp, cloudrun-mcp,
+#      artifactregistry-mcp, bigquery-mcp), artifact sources, and the control plane;
+#   2. plus the union of the EgressPolicies the Agent lists in egressPolicyRefs.
+# A standalone Sandbox gets ONLY (2), from its SandboxTemplate's egressPolicyRefs.
+#
+# So the policies below add exactly: GitLab, and package registries. Nothing
+# else on the internet is reachable. EgressPolicy has no "deny" rule and no
+# way to restrict inferred access; it is additive only.
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: EgressPolicy
+metadata:
+  name: workbench-gitlab
+  namespace: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  destinations:
+    # git clone/push over HTTPS. The gateway replaces the placeholder
+    # Authorization header (set by GIT_CONFIG_* in harness.yaml) with
+    # "Basic " + the Secret value. Create the Secret with the base64 of
+    # "<bot-username>:<group-access-token>" for a bot that is Developer on the
+    # workbench-apps group only (it can push branches; protected `main` and
+    # production deploy variables stay out of reach):
+    #   printf '%s' 'workbench-builder:glpat-...' | base64 -w0 > token.b64
+    #   kubectl -n workbench-builders create secret generic gitlab-git-auth \
+    #     --from-file=basic=token.b64
+    - origin: https://gitlab.example.com
+      authentication:
+        header: Authorization
+        prefix: "Basic "
+        secretKeyRef:
+          name: gitlab-git-auth
+          key: basic
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: EgressPolicy
+metadata:
+  name: workbench-packages
+  namespace: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  destinations:
+    # npm
+    - origin: https://registry.npmjs.org
+    # PyPI (index + file host); uv and pip use both
+    - origin: https://pypi.org
+    - origin: https://files.pythonhosted.org
+    # Go modules and checksum DB
+    - origin: https://proxy.golang.org
+    - origin: https://sum.golang.org
+    # If you run an Artifact Registry remote repository as a package proxy,
+    # replace the public registries above with its single origin, e.g.
+    # https://europe-npm.pkg.dev and https://europe-python.pkg.dev, and point
+    # npm_config_registry / UV_INDEX_URL at it in harness.yaml.

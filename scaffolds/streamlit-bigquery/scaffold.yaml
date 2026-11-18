@@ -1,0 +1,63 @@
+apiVersion: workbench.dev/v1
+kind: Scaffold
+name: streamlit-bigquery
+description: >-
+  A data app: charts, tables and filters over BigQuery, written in Python with
+  Streamlit, reading through a read-only service account with a per-query
+  maximum-bytes-billed ceiling.
+whenToUse:
+  - Dashboards and reports over tables that already exist in BigQuery
+  - '"Let me filter and download this data" tools'
+  - Exploring a dataset with a few controls (dates, regions, products)
+whenNotToUse:
+  - Anything that writes data or has a multi-step workflow (use python-fastapi-cloudrun)
+  - Public or high-traffic pages, or pixel-precise UI (use node-react-cloudrun)
+  - Data not in BigQuery
+language: python
+runtime:
+  python: ">=3.12"
+  framework: streamlit
+  packageManager: uv
+ports:
+  - name: http
+    containerPort: 8080
+    env: PORT
+healthCheck:
+  path: /_stcore/health
+identity:
+  source: IAP
+  headers: [X-Goog-Authenticated-User-Email, X-Goog-IAP-JWT-Assertion]
+  verifyWith: IAP_AUDIENCE
+commands:
+  install: make install
+  test: make test
+  run: make run
+  lint: make lint
+rename:
+  placeholder: workbench-app
+  # Never the package name in pyproject.toml or package.json: the lockfile
+  # records it, and a lockfile cannot be regenerated without a shell. The
+  # name people see comes from the files below.
+  files: [app/streamlit_app.py, README.md]
+configuration:
+  BQ_PROJECT: project that runs (and pays for) query jobs
+  BQ_LOCATION: dataset location, e.g. EU or US
+  MAX_BYTES_BILLED: per-query ceiling in bytes (default 1073741824 = 1 GiB)
+  APP_NAME: used as the workbench-app job label for cost attribution
+requiredApis:
+  - run.googleapis.com
+  - iap.googleapis.com
+  - bigquery.googleapis.com
+  - artifactregistry.googleapis.com
+  - cloudbuild.googleapis.com
+  - logging.googleapis.com
+runtimeServiceAccount:
+  name: "app-{name}@{project}.iam.gserviceaccount.com"
+  roles:
+    - role: roles/bigquery.jobUser
+      on: the BQ_PROJECT project
+    - role: roles/bigquery.dataViewer
+      on: each dataset (or table) the app reads - never the whole project
+notes:
+  - Cloud Run session affinity should be enabled (Streamlit keeps session state per instance over a websocket).
+  - Set a request timeout of 3600s so websocket sessions are not cut short.

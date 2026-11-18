@@ -1,0 +1,13 @@
+# Builder agents, their tool registrations, egress grants and sandbox template
+# all live in one namespace. kagent resolves every reference (Agent ->
+# AgentTemplate/Harness, AgentTemplate -> ModelConfig/RemoteMCPServer/subagent,
+# Agent/SandboxTemplate -> EgressPolicy) in the referencing object's namespace,
+# and EgressPolicy Secrets must be in the policy's namespace, so this namespace
+# is the trust boundary for the builder's credentials (see egress-policies.md,
+# "Authorization and scope").
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench

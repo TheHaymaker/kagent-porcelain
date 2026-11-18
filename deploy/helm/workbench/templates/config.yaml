@@ -1,0 +1,13 @@
+{{- if not .Values.config }}
+{{- fail "config is required; start from deploy/workbench.example.yaml" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workbench-config
+  labels:
+    app.kubernetes.io/name: workbench
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  workbench.yaml: |
+    {{- toYaml .Values.config | nindent 4 }}

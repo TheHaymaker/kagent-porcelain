@@ -1,0 +1,97 @@
+# artifactregistry-mcp: Workbench Artifact Registry (read-only): list build images and tags, resolve tag digests
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: artifactregistry-mcp
+  namespace: workbench-tools
+  annotations:
+    # Workload Identity: bind this KSA to the GSA (roles in tools/README.md).
+    iam.gke.io/gcp-service-account: wb-artifactregistry-mcp@WB_PLATFORM_PROJECT.iam.gserviceaccount.com
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: artifactregistry-mcp
+  namespace: workbench-tools
+  labels:
+    app.kubernetes.io/name: artifactregistry-mcp
+    app.kubernetes.io/part-of: workbench
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: artifactregistry-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: artifactregistry-mcp
+        app.kubernetes.io/part-of: workbench
+    spec:
+      serviceAccountName: artifactregistry-mcp
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: REGISTRY/workbench/artifactregistry-mcp:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: LISTEN_ADDR
+              value: ":8080"
+            # Set "true" once the harness forwards X-User-Id (see README, "Caller identity").
+            - name: REQUIRE_REQUESTER
+              value: "false"
+            - name: AR_PROJECT
+              value: WB_BUILDS_PROJECT
+            - name: AR_LOCATION
+              value: europe-west1
+            - name: AR_REPOSITORY
+              value: builds
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: artifactregistry-mcp
+  namespace: workbench-tools
+  labels:
+    app.kubernetes.io/name: artifactregistry-mcp
+spec:
+  selector:
+    app.kubernetes.io/name: artifactregistry-mcp
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: artifactregistry-mcp
+  namespace: workbench-tools
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  description: "Workbench Artifact Registry (read-only): list build images and tags, resolve tag digests"
+  protocol: STREAMABLE_HTTP
+  url: http://artifactregistry-mcp.workbench-tools.svc.cluster.local:8080/mcp
+  timeout: 30s
+  allowedNamespaces:
+    from: Selector
+    selector:
+      matchLabels:
+        workbench.dev/builder-agents: "true"

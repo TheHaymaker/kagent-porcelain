@@ -1,0 +1,53 @@
+apiVersion: workbench.dev/v1
+kind: Scaffold
+name: node-react-cloudrun
+description: >-
+  A React single-page app (Vite) with a small Express API in one Cloud Run
+  service behind IAP. For richer, more interactive internal tools.
+whenToUse:
+  - Interactive UIs - inline editing, drag-and-drop, many controls on one screen
+  - Tools whose UI state is complex enough that full-page reloads feel clumsy
+  - The team that will own the app afterwards works in JavaScript/TypeScript
+whenNotToUse:
+  - Simple forms and lists (use python-fastapi-cloudrun - less code to maintain)
+  - Charts over BigQuery (use streamlit-bigquery)
+language: javascript
+runtime:
+  node: ">=22"
+  framework: express + react (vite)
+  packageManager: npm
+ports:
+  - name: http
+    containerPort: 8080
+    env: PORT
+healthCheck:
+  path: /healthz
+identity:
+  source: IAP
+  headers: [x-goog-authenticated-user-email, x-goog-iap-jwt-assertion]
+  verifyWith: IAP_AUDIENCE
+commands:
+  install: make install
+  test: make test
+  run: make run
+  lint: make lint
+rename:
+  placeholder: workbench-app
+  # Never the package name in pyproject.toml or package.json: the lockfile
+  # records it, and a lockfile cannot be regenerated without a shell. The
+  # name people see comes from the files below.
+  files: [web/index.html, web/src/App.jsx, README.md]
+requiredApis:
+  - run.googleapis.com
+  - iap.googleapis.com
+  - artifactregistry.googleapis.com
+  - cloudbuild.googleapis.com
+  - logging.googleapis.com
+runtimeServiceAccount:
+  name: "app-{name}@{project}.iam.gserviceaccount.com"
+  roles: []   # no project roles; see IAM.md for what to add per feature
+state:
+  default: in-memory (resets on every restart; fine for demos, not for real data)
+  persistent: >-
+    Add Firestore in Native mode (firestore.googleapis.com) with
+    roles/datastore.user on the app's own database only; see IAM.md.

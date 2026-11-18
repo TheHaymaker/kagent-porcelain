@@ -1,0 +1,113 @@
+# AgentTemplates: WHAT the agents do. Fields from
+# go/api/v1alpha3/agenttemplate_types.go.
+---
+# The reviewer is bound into the builder as a Shared subagent
+# (tools[].subAgent.templateRef). Under the Claude harness it is compiled into a
+# native Claude Code local agent in the SAME Actor (a2a-subagents.md). The Claude
+# compiler requires a local agent to have no tools, skills or plugins of its own
+# and to use the root agent's provider/credential configuration; only
+# description, prompt and model.model are carried over. So it gets the same
+# ModelConfig and nothing else.
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: workbench-reviewer
+  namespace: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  description: Reviews a builder's changes to a golden-path scaffold before preview deploys.
+  modelConfig:
+    name: workbench-claude
+  systemPromptFrom:
+    name: workbench-builder-prompts
+    key: reviewer.md
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: workbench-builder
+  namespace: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  description: >-
+    Builds small internal apps for non-engineers from Workbench golden-path
+    scaffolds, deploys previews to Cloud Run, and requests production through a
+    Workbench approval.
+  modelConfig:
+    name: workbench-claude
+  systemPromptFrom:
+    name: workbench-builder-prompts
+    key: builder.md
+  tools:
+    # requireApproval (MCPToolBinding) pauses before every call to a tool the
+    # binding exposes and surfaces a kagent HITL tool_approval_request. Under the
+    # Claude harness:
+    #   - `tools:` selection is NOT enforced ("Enforced selection of individual
+    #     tools from an MCP server" is unimplemented; the compiler warns and
+    #     exposes the whole server), and a server may be bound only once, so
+    #     requireApproval is effectively per SERVER, not per tool.
+    #   - Workbench turns each pause into an approval and classifies it PER TOOL
+    #     with its reviewed policy (server/internal/policy): production deploys
+    #     and IAM changes go to an approver group; deletions and new spend (e.g.
+    #     cloudrun_deploy_preview with allow_create=true) may be decided by the
+    #     requester; everything else is "ordinary" and the requester can answer
+    #     once and have it remembered. So server-level gating + Workbench's
+    #     per-tool policy gives per-tool behaviour overall.
+    #   - Gated: cloudrun-mcp (the server that changes running infrastructure
+    #     and spends money). Not gated: workbench-api (promotion opens a
+    #     Workbench approval server-side anyway, and gating would pause every
+    #     workbench_show), gitlab-mcp/artifactregistry-mcp/bigquery-mcp (scoped
+    #     by their own credentials to non-destructive, preview/read-only work;
+    #     gating would pause every pipeline poll and schema read).
+    #   See agents/README.md ("Tool approvals").
+    - mcp:
+        server:
+          kind: RemoteMCPServer
+          name: workbench-api
+        requireApproval: false
+    - mcp:
+        server:
+          kind: RemoteMCPServer
+          name: gitlab-mcp
+        requireApproval: false
+    - mcp:
+        server:
+          kind: RemoteMCPServer
+          name: cloudrun-mcp
+        requireApproval: true
+    - mcp:
+        server:
+          kind: RemoteMCPServer
+          name: artifactregistry-mcp
+        requireApproval: false
+    - mcp:
+        server:
+          kind: RemoteMCPServer
+          name: bigquery-mcp
+        requireApproval: false
+    - subAgent:
+        name: reviewer
+        description: >-
+          Review the app's diff against its scaffold for security, data access,
+          IAM and maintainability before the first preview deploy and before
+          requesting production. Read-only; returns findings.
+        templateRef:
+          name: workbench-reviewer
+  # Skills ship as one Agent Plugins package (agents/skills) built into a
+  # FROM-scratch OCI image. OCI sources are mounted read-only by Substrate before
+  # the golden runtime starts, so they need no egress; Git/S3 sources are fetched
+  # at runtime and inherit golden-runtime networking limits
+  # (configuration-and-compilation.md, "OCI skill delivery"). The Claude harness
+  # copies the selected skills into a generated `kagent-skills` plugin.
+  plugins:
+    - source:
+        oci: europe-docker.pkg.dev/workbench-platform/workbench/builder-skills@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      skills:
+        - building-internal-apps
+        - using-scaffolds
+        - deploying-previews
+        - requesting-production
+        - emitting-components
+        - working-with-bigquery-data

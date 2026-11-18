@@ -1,0 +1,67 @@
+# CI for a Workbench app: test, then build the image into Artifact Registry.
+#
+# There is deliberately NO deploy job. The Workbench builder deploys previews
+# through the cloudrun-mcp tool, and production happens only after a Workbench
+# approval (performed by Workbench with its own identity). CI never holds
+# Cloud Run deploy rights.
+#
+# Required group-level CI/CD variables (set once on the workbench-apps group):
+#   GCP_PROJECT_ID   project holding Artifact Registry and Cloud Build
+#   GCP_REGION       e.g. europe-west1
+#   AR_REPOSITORY    Docker repository name, e.g. workbench-apps
+# and the group's Google Cloud IAM integration (Workload Identity Federation),
+# so `identity: google_cloud` gives jobs short-lived credentials for the CI
+# service account described in IAM.md. No JSON keys.
+
+stages: [test, build]
+
+variables:
+  IMAGE: "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${AR_REPOSITORY}/${CI_PROJECT_NAME}"
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+test:
+  stage: test
+  image: ghcr.io/astral-sh/uv:0.11.32-python3.12-trixie-slim
+  variables:
+    UV_CACHE_DIR: .uv-cache
+    UV_PYTHON_DOWNLOADS: never
+  cache:
+    key:
+      files: [uv.lock]
+    paths: [.uv-cache]
+  script:
+    - uv sync --frozen
+    - uv run ruff check .
+    - uv run ruff format --check .
+    - uv run pytest --junitxml=report.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+
+build-image:
+  stage: build
+  image: gcr.io/google.com/cloudsdktool/google-cloud-cli:stable
+  identity: google_cloud
+  needs: [test]
+  script:
+    # Cloud Build builds the Dockerfile remotely and pushes to Artifact
+    # Registry: no Docker daemon or privileged runner needed.
+    - >
+      gcloud builds submit .
+      --project "$GCP_PROJECT_ID" --region "$GCP_REGION"
+      --tag "$IMAGE:$CI_COMMIT_SHA"
+      --default-buckets-behavior=regional-user-owned-bucket
+      --suppress-logs
+    - >
+      DIGEST=$(gcloud artifacts docker images describe "$IMAGE:$CI_COMMIT_SHA"
+      --project "$GCP_PROJECT_ID" --format='value(image_summary.digest)')
+    - echo "IMAGE_REF=$IMAGE@$DIGEST" | tee image.env
+  artifacts:
+    reports:
+      dotenv: image.env

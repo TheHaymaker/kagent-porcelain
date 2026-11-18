@@ -1,0 +1,41 @@
+# SandboxTemplate: a disposable environment the builder can create through
+# kagent's sandbox MCP tools (create_sandbox, start_sandbox_process,
+# read_sandbox_outputs, write_sandbox_file, delete_sandbox — served on the same
+# /mcp endpoint as the workbench_* tools, i.e. the workbench-api binding).
+#
+# The builder's own Actor already has the toolchain, so day-to-day building and
+# testing happen there. The sandbox is for work that should not touch the
+# builder's durable workspace or run with its egress: running an app the
+# requester uploaded, a clean-room `make test` from a fresh clone before
+# requesting production, or a long-running local server for smoke tests.
+#
+# Fields from go/api/v1alpha3/sandboxtemplate_types.go: workload.image (digest
+# pinned, no command: kagent supplies the guest entrypoint), env (literal only),
+# substrate, egressPolicyRefs. A sandbox with no egressPolicyRefs has NO egress;
+# this one may install packages but cannot reach GitLab, the model gateway or
+# any tool server.
+apiVersion: api.kagent.dev/v1alpha3
+kind: SandboxTemplate
+metadata:
+  name: workbench-app-runner
+  namespace: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  workload:
+    # Built from agents/image/Dockerfile --target toolchain.
+    image: europe-docker.pkg.dev/workbench-platform/workbench/builder-toolchain@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  env:
+    - name: LANG
+      value: C.UTF-8
+    - name: PIP_CERT
+      value: /run/kagent/egress/trust-bundle.pem
+    - name: WORKBENCH_SCAFFOLDS_DIR
+      value: /opt/workbench/scaffolds
+  substrate:
+    workerPoolRef:
+      name: kagent-default
+    snapshotPolicy:
+      location: s3://ate-snapshots/workbench-sandboxes/
+  egressPolicyRefs:
+    - name: workbench-packages

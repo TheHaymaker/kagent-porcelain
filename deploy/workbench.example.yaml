@@ -1,0 +1,59 @@
+# Workbench's own configuration. kagent's controller.yaml sits beside it and
+# is exactly what kagent documents; see deploy/controller.example.yaml.
+publicUrl: https://workbench.example.com
+
+identity:
+  issuers:
+    # People sign in with the company account on every surface.
+    - kind: company
+      url: https://accounts.google.com
+      audiences: ["workbench-web.apps.googleusercontent.com", "workbench-mobile.apps.googleusercontent.com"]
+      groupsClaim: groups
+      surface: web
+    # Teams users present a Microsoft token; it resolves to a company person
+    # through an identity link made once from the web app.
+    - kind: linked
+      url: https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0
+      audiences: ["api://workbench"]
+      subjectClaim: oid
+      surface: teams
+  internalKeyFile: /var/run/secrets/workbench/internal-key
+
+authorization:
+  platformGroups: [workbench-platform]
+  requesterGroups: [workbench-requesters]
+  auditorGroups: [workbench-audit]
+  agentNamespaces: [workbench]
+
+# Strict and narrow to start: four always-ask kinds, one approver group.
+defaultApproverGroup: workbench-approvers
+
+hooks:
+  bindAddress: ":8090"
+  callbackUrl: http://workbench-hooks.workbench.svc.cluster.local:8090/hooks/a2a
+  pushIssuer: https://workbench.example.com
+  usageSecretFile: /var/run/secrets/workbench/usage-secret
+
+production:
+  deployer: cloudrun
+  cloudRun:
+    project: acme-apps-prod
+    region: europe-west1
+    serviceAccountTemplate: "wb-{app}@acme-apps-prod.iam.gserviceaccount.com"
+    ingress: INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER
+
+audit:
+  bigQuery:
+    project: acme-platform
+    dataset: workbench_audit
+    table: events
+    interval: 30s
+
+notifications:
+  smtp:
+    addr: smtp-relay.gmail.com:587
+    from: Workbench <workbench@example.com>
+  teams:
+    url: http://workbench-teams-bot.workbench.svc.cluster.local/api/notify
+    secretFile: /var/run/secrets/workbench/teams-secret
+  fcmProject: acme-workbench-mobile

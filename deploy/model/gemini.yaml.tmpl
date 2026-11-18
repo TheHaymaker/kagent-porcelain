@@ -1,0 +1,44 @@
+# A real model for Workbench's agents: Gemini on Vertex AI, and a minimal
+# agent that uses it for the real-model check (workbench-smoke chat).
+# Rendered by deploy/gcp/up.sh (Python string.Template): ${NAMESPACE}
+# ${GEMINI_MODEL} ${GEMINI_BASE_URL}.
+#
+# kagent's Gemini provider is pointed at Vertex AI with an API key bound to
+# the workbench-vertex service account (Vertex AI User only), in the
+# workbench-gemini Secret that up.sh creates (never committed). Substrate
+# adds the key to the agent's requests at its egress proxy, so it never
+# enters the agent's microVM. kagent's GeminiVertexAI provider is not used:
+# its credentials are a mounted key file or the GKE metadata server, and
+# Substrate actors have neither.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata:
+  name: workbench-gemini
+  namespace: ${NAMESPACE}
+spec:
+  provider: Gemini
+  model: ${GEMINI_MODEL}
+  apiKeySecret: workbench-gemini
+  apiKeySecretKey: GOOGLE_API_KEY
+  gemini:
+    baseUrl: ${GEMINI_BASE_URL}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: AgentTemplate
+metadata:
+  name: workbench-gemini-check
+  namespace: ${NAMESPACE}
+spec:
+  description: Real-model connectivity check for Workbench
+  modelConfig: {name: workbench-gemini}
+  systemPrompt: You are a terse assistant. Follow the user's formatting instructions exactly.
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata:
+  name: workbench-gemini-check
+  namespace: ${NAMESPACE}
+spec:
+  template:
+    ref: {name: workbench-gemini-check}
+  harnessRef: {name: kagent-default}

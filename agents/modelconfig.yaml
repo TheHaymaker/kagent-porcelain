@@ -1,0 +1,41 @@
+# ModelConfig: the builder talks to the in-cluster model gateway
+# (agents/model-gateway), which speaks the Anthropic Messages API and forwards to
+# Claude on Vertex AI using its own Workload Identity.
+#
+# Why provider Anthropic + baseUrl and not provider AnthropicVertexAI:
+#   - The Claude harness compiler (go/core/internal/translator/claude) accepts
+#     Anthropic (apiKeySecret or actorJwt, optional anthropic.baseUrl), Bedrock,
+#     and AnthropicVertexAI. AnthropicVertexAI needs a Google service-account
+#     JSON key in apiKeySecret, which is materialised inside the Actor and lets
+#     the Actor reach the whole Vertex API. We do not want a long-lived Google key
+#     anywhere near an agent that writes and runs arbitrary code.
+#   - With Anthropic + baseUrl, the only egress the compiler infers for the model
+#     is the gateway origin, and the credential is a gateway-scoped virtual key
+#     that Substrate's egress gateway injects as `x-api-key` (credential-injection.md,
+#     "Supported credentials"). The Actor only ever sees a placeholder.
+#   - The Claude compiler rejects every `anthropic.*` option except baseUrl (and
+#     the default cacheTTL), and rejects defaultHeaders/TLS/tokenPassthrough, so
+#     nothing else is set here. Model choice, budgets and per-requester spend
+#     limits are enforced by the gateway, not by this object.
+apiVersion: api.kagent.dev/v1alpha3
+kind: ModelConfig
+metadata:
+  name: workbench-claude
+  namespace: workbench-builders
+  labels:
+    app.kubernetes.io/part-of: workbench
+spec:
+  provider: Anthropic
+  # The gateway's model alias. On Vertex AI current Claude models use the bare
+  # first-party id; the gateway maps this alias to vertex_ai/claude-opus-5-5.
+  model: claude-opus-5-5
+  anthropic:
+    # Plain HTTP is accepted for in-cluster services (the mesh secures transport);
+    # the origin must match the EgressPolicy-style exact origin rules.
+    baseUrl: http://model-gateway.workbench-system.svc.cluster.local:4000
+  # A LiteLLM virtual key minted for the builder namespace (see
+  # agents/model-gateway/README section in agents/README.md). Create it with:
+  #   kubectl -n workbench-builders create secret generic model-gateway-key \
+  #     --from-literal=api-key=sk-...
+  apiKeySecret: model-gateway-key
+  apiKeySecretKey: api-key
