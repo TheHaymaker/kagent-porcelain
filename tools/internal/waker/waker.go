@@ -30,9 +30,14 @@ type Config struct {
 	Nodes                            int           // nodes when running
 	Idle                             time.Duration // pause after this long without traffic
 	Debounce                         time.Duration // at most one resize request per this
-	ContainerURL                     string        // default https://container.googleapis.com
-	KubeURL                          string        // default https://kubernetes.default.svc
-	KubeToken                        func() (string, error)
+	// ForceDrainAfter: if the pool still has nodes this long after it was
+	// set to 0, delete the pods left on them. GKE's drain honours
+	// disruption budgets for up to an hour, and a budget whose pods have
+	// nowhere else to go (only this pool runs them) never allows it.
+	ForceDrainAfter time.Duration
+	ContainerURL    string // default https://container.googleapis.com
+	KubeURL         string // default https://kubernetes.default.svc
+	KubeToken       func() (string, error)
 }
 
 // Validate checks the configuration and fills defaults.
@@ -48,6 +53,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Debounce == 0 {
 		c.Debounce = 2 * time.Minute
+	}
+	if c.ForceDrainAfter == 0 {
+		c.ForceDrainAfter = 2 * time.Minute
 	}
 	if c.ContainerURL == "" {
 		c.ContainerURL = "https://container.googleapis.com"
@@ -71,7 +79,8 @@ type Waker struct {
 	mu         sync.Mutex
 	last       time.Time // last activity
 	lastResize time.Time
-	target     int // the size last asked for, -1 if unknown
+	target     int       // the size last asked for, -1 if unknown
+	pausedAt   time.Time // when GKE accepted size 0; zero when not pausing
 }
 
 // New builds a Waker. cfg must have been validated.
@@ -89,7 +98,13 @@ func (w *Waker) Activity(ctx context.Context) {
 		w.log.WarnContext(ctx, "count nodes", "error", err)
 		return
 	}
-	if n == 0 {
+	w.mu.Lock()
+	pausing := !w.pausedAt.IsZero()
+	w.mu.Unlock()
+	// Paused, or still draining towards a pause: ask for the full size. While
+	// GKE finishes the earlier resize this is refused, and retried on the
+	// next request.
+	if n == 0 || pausing {
 		w.resize(ctx, w.cfg.Nodes, "a request arrived while paused")
 	}
 }
@@ -102,13 +117,74 @@ func (w *Waker) Tick(ctx context.Context) {
 	if idle < w.cfg.Idle {
 		return
 	}
-	n, err := w.Nodes(ctx)
+	nodes, err := w.nodeNames(ctx)
 	if err != nil {
 		w.log.WarnContext(ctx, "count nodes", "error", err)
 		return
 	}
-	if n > 0 {
+	if len(nodes) == 0 {
+		w.mu.Lock()
+		w.pausedAt = time.Time{}
+		w.mu.Unlock()
+		return
+	}
+	w.mu.Lock()
+	pausedAt := w.pausedAt
+	w.mu.Unlock()
+	if pausedAt.IsZero() {
 		w.resize(ctx, 0, fmt.Sprintf("no traffic for %s", idle.Round(time.Minute)))
+		return
+	}
+	if w.now().Sub(pausedAt) >= w.cfg.ForceDrainAfter {
+		w.forceDrain(ctx, nodes)
+	}
+}
+
+// forceDrain deletes the pods still on the pool's nodes, except DaemonSet
+// and static pods. Deleting, unlike evicting, is not held up by disruption
+// budgets; the pods' controllers recreate them, Pending until the pool
+// returns.
+func (w *Waker) forceDrain(ctx context.Context, nodes []string) {
+	deleted := 0
+	for _, node := range nodes {
+		q := url.Values{"fieldSelector": {"spec.nodeName=" + node}}
+		var list struct {
+			Items []struct {
+				Metadata struct {
+					Name            string            `json:"name"`
+					Namespace       string            `json:"namespace"`
+					Annotations     map[string]string `json:"annotations"`
+					OwnerReferences []struct {
+						Kind string `json:"kind"`
+					} `json:"ownerReferences"`
+				} `json:"metadata"`
+			} `json:"items"`
+		}
+		if err := w.kubeJSON(ctx, http.MethodGet, "/api/v1/pods?"+q.Encode(), &list); err != nil {
+			w.log.WarnContext(ctx, "list pods to drain", "node", node, "error", err)
+			continue
+		}
+		for _, p := range list.Items {
+			if _, static := p.Metadata.Annotations["kubernetes.io/config.mirror"]; static {
+				continue
+			}
+			daemon := false
+			for _, o := range p.Metadata.OwnerReferences {
+				daemon = daemon || o.Kind == "DaemonSet"
+			}
+			if daemon {
+				continue
+			}
+			path := "/api/v1/namespaces/" + url.PathEscape(p.Metadata.Namespace) + "/pods/" + url.PathEscape(p.Metadata.Name)
+			if err := w.kubeJSON(ctx, http.MethodDelete, path, nil); err != nil {
+				w.log.WarnContext(ctx, "delete pod to drain", "pod", p.Metadata.Namespace+"/"+p.Metadata.Name, "error", err)
+				continue
+			}
+			deleted++
+		}
+	}
+	if deleted > 0 {
+		w.log.InfoContext(ctx, "drained pods that held up the pause", "pool", w.cfg.Pool, "pods", deleted)
 	}
 }
 
@@ -139,38 +215,69 @@ func (w *Waker) resize(ctx context.Context, size int, why string) {
 		w.log.WarnContext(ctx, "resize node pool", "pool", w.cfg.Pool, "size", size, "error", err)
 		return
 	}
+	w.mu.Lock()
+	if size == 0 {
+		w.pausedAt = w.now()
+	} else {
+		w.pausedAt = time.Time{}
+	}
+	w.mu.Unlock()
 	w.log.InfoContext(ctx, "resized node pool", "pool", w.cfg.Pool, "size", size, "why", why)
 }
 
 // Nodes counts the pool's nodes that Kubernetes knows about.
 func (w *Waker) Nodes(ctx context.Context) (int, error) {
+	names, err := w.nodeNames(ctx)
+	return len(names), err
+}
+
+func (w *Waker) nodeNames(ctx context.Context) ([]string, error) {
 	q := url.Values{"labelSelector": {"cloud.google.com/gke-nodepool=" + w.cfg.Pool}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, w.cfg.KubeURL+"/api/v1/nodes?"+q.Encode(), nil)
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := w.kubeJSON(ctx, http.MethodGet, "/api/v1/nodes?"+q.Encode(), &list); err != nil {
+		return nil, fmt.Errorf("listing nodes: %w", err)
+	}
+	names := make([]string, 0, len(list.Items))
+	for _, n := range list.Items {
+		names = append(names, n.Metadata.Name)
+	}
+	return names, nil
+}
+
+// kubeJSON calls the Kubernetes API with the pod's service account token.
+func (w *Waker) kubeJSON(ctx context.Context, method, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, method, w.cfg.KubeURL+path, nil)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	if w.cfg.KubeToken != nil {
 		tok, err := w.cfg.KubeToken()
 		if err != nil {
-			return 0, err
+			return err
 		}
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	resp, err := w.kube.Do(req)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("listing nodes: HTTP %d", resp.StatusCode)
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		if resp.StatusCode == http.StatusNotFound && method == http.MethodDelete {
+			return nil // already gone
+		}
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	var list struct {
-		Items []json.RawMessage `json:"items"`
+	if out == nil {
+		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return 0, err
-	}
-	return len(list.Items), nil
+	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 // Handler serves the endpoints nginx calls:

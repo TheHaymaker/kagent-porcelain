@@ -568,7 +568,13 @@ W
 
 # Node pools after up.sh resize: the web app and the waker live on the small
 # always-on pool; everything else on the workload pool the waker pauses.
-SYSTEM_POOL=system
+# The always-on pool must hold GKE's own pods (DNS, metrics) while the
+# workload pool is at 0, so e2-standard-2 (an e2-medium was 96% reserved).
+# Pods find it by label, not by name, so the pool can be replaced.
+SYSTEM_POOL=always-on
+SYSTEM_MACHINE=e2-standard-2
+SYSTEM_LABEL=workbench.dev/always-on
+LEGACY_SYSTEM_POOLS="system"
 WORKLOAD_POOL=workload
 WORKLOAD_NODES=${WORKLOAD_NODES:-2}
 IDLE_PAUSE=${IDLE_PAUSE:-1h}
@@ -579,7 +585,7 @@ has_pool() { gc container node-pools describe "$1" --cluster "$CLUSTER" --zone "
 waker_values() {
   has_pool "$SYSTEM_POOL" && has_pool "$WORKLOAD_POOL" || return 0
   cat <<W
-  nodeSelector: {cloud.google.com/gke-nodepool: $SYSTEM_POOL}
+  nodeSelector: {$SYSTEM_LABEL: "true"}
   tolerations:
     - {key: components.gke.io/gke-managed-components, operator: Equal, value: "true", effect: NoSchedule}
   waker:
@@ -1143,12 +1149,13 @@ for e in entries:
 phase_resize() {
   kubeconfig
   say "Node pools: $SYSTEM_POOL (always on) and $WORKLOAD_POOL (paused when idle), both Spot"
+  wait_operations
   if ! has_pool "$SYSTEM_POOL"; then
     # GKE's own pods (DNS, metrics) tolerate this taint; ours do not, except
     # the web app, so only they run here and it stays small.
     gc container node-pools create "$SYSTEM_POOL" --cluster "$CLUSTER" --zone "$ZONE" \
-      --machine-type e2-medium --num-nodes 1 --spot --disk-size 30 --disk-type pd-balanced \
-      --workload-metadata GKE_METADATA --node-taints "$SYSTEM_TAINT"
+      --machine-type "$SYSTEM_MACHINE" --num-nodes 1 --spot --disk-size 30 --disk-type pd-balanced \
+      --workload-metadata GKE_METADATA --node-taints "$SYSTEM_TAINT" --node-labels "$SYSTEM_LABEL=true"
   fi
   if ! has_pool "$WORKLOAD_POOL"; then
     # One node while the old pool still exists: both together can exceed the
@@ -1159,6 +1166,15 @@ phase_resize() {
       --machine-type e2-standard-4 --num-nodes "$first" --spot --disk-size 50 --disk-type pd-balanced \
       --workload-metadata GKE_METADATA
   fi
+  local legacy
+  for legacy in $LEGACY_SYSTEM_POOLS; do
+    if has_pool "$legacy"; then
+      # The web app moves to the new pool on the next expose/workbench run
+      # (it selects nodes by label); until then it is briefly unavailable.
+      say "Replacing the old always-on pool $legacy"
+      gc container node-pools delete "$legacy" --cluster "$CLUSTER" --zone "$ZONE" --quiet
+    fi
+  done
   if has_pool default-pool; then
     say "Moving pods off the old default pool"
     local n
@@ -1190,10 +1206,24 @@ phase_resize() {
   echo "Now run up.sh expose (or workbench) so the web app moves to $SYSTEM_POOL with the waker."
 }
 
+# wait_operations waits (up to 75 minutes) for running GKE operations, such as
+# a node pool drain, which block any other change to the cluster.
+wait_operations() {
+  local i running
+  for i in $(seq 1 150); do
+    running=$(gc container operations list --zone "$ZONE" --filter "status=RUNNING" --format 'value(name)' 2>/dev/null | head -1)
+    [[ -z $running ]] && return 0
+    (( i == 1 )) && echo "  waiting for GKE operation $running to finish"
+    sleep 30
+  done
+  die "a GKE operation is still running after 75 minutes"
+}
+
 phase_pause() { resize_workload 0; }
 phase_resume() { resize_workload "$WORKLOAD_NODES"; }
 resize_workload() {
   has_pool "$WORKLOAD_POOL" || die "no $WORKLOAD_POOL pool; run up.sh resize first"
+  wait_operations
   gc container clusters resize "$CLUSTER" --zone "$ZONE" --node-pool "$WORKLOAD_POOL" --num-nodes "$1" --quiet
 }
 

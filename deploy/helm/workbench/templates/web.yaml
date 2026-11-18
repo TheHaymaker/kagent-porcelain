@@ -111,7 +111,8 @@ spec:
           emptyDir: {}
 {{- if .Values.web.waker.enabled }}
 ---
-# The waker counts the workload pool's nodes and resizes it (through Workload
+# The waker counts the workload pool's nodes, finishes stalled drains, and
+# resizes the pool (through Workload
 # Identity: the Google role is granted to this account by deploy/gcp/up.sh).
 apiVersion: v1
 kind: ServiceAccount
@@ -126,6 +127,11 @@ rules:
   - apiGroups: [""]
     resources: [nodes]
     verbs: [list]
+  # Finishing a pause: pods left on the paused pool's nodes are deleted
+  # when disruption budgets would hold the drain for an hour.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

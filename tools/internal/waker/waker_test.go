@@ -18,6 +18,8 @@ type fake struct {
 	nodes   int
 	resizes []int
 	fail    bool
+	pods    []map[string]any // on every node
+	deleted []string
 }
 
 func (f *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +32,19 @@ func (f *fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items := make([]map[string]any, f.nodes)
+		for i := range items {
+			items[i] = map[string]any{"metadata": map[string]any{"name": "node-" + string(rune('a'+i))}}
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/pods":
+		if !strings.HasPrefix(r.URL.Query().Get("fieldSelector"), "spec.nodeName=node-") {
+			w.WriteHeader(400)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": f.pods})
+	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/namespaces/"):
+		f.deleted = append(f.deleted, r.URL.Path)
+		_, _ = w.Write([]byte(`{}`))
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/projects/p/locations/us-central1-a/clusters/c/nodePools/workload:setSize":
 		if f.fail {
 			w.WriteHeader(400)
@@ -141,5 +155,56 @@ func TestConfigValidate(t *testing.T) {
 		if err := c.Validate(); err == nil {
 			t.Errorf("%+v validated", c)
 		}
+	}
+}
+
+func pod(ns, name, owner string, mirror bool) map[string]any {
+	md := map[string]any{"name": name, "namespace": ns}
+	if owner != "" {
+		md["ownerReferences"] = []map[string]any{{"kind": owner}}
+	}
+	if mirror {
+		md["annotations"] = map[string]string{"kubernetes.io/config.mirror": "x"}
+	}
+	return map[string]any{"metadata": md}
+}
+
+func TestForceDrainsPodsThatHoldUpThePause(t *testing.T) {
+	f, w, now := setup(t, 1)
+	f.pods = []map[string]any{
+		pod("ate-system", "ate-api-server-1", "ReplicaSet", false),
+		pod("kube-system", "fluentbit-1", "DaemonSet", false),
+		pod("kube-system", "kube-proxy-x", "", true),
+	}
+	ctx := context.Background()
+	*now = now.Add(61 * time.Minute)
+	w.Tick(ctx) // asks for 0
+	if len(f.resizes) != 1 || f.resizes[0] != 0 {
+		t.Fatalf("resizes %v", f.resizes)
+	}
+	*now = now.Add(time.Minute)
+	w.Tick(ctx) // node still there, but give GKE its drain time
+	if len(f.deleted) != 0 {
+		t.Fatalf("drained too early: %v", f.deleted)
+	}
+	*now = now.Add(2 * time.Minute)
+	w.Tick(ctx)
+	if len(f.deleted) != 1 || f.deleted[0] != "/api/v1/namespaces/ate-system/pods/ate-api-server-1" {
+		t.Fatalf("deleted %v", f.deleted)
+	}
+	if len(f.resizes) != 1 {
+		t.Fatalf("asked for 0 again while draining: %v", f.resizes)
+	}
+	// Traffic while draining: the pool is asked back up, and with traffic
+	// the waker no longer drains.
+	f.deleted = nil
+	w.Activity(ctx)
+	if len(f.resizes) != 2 || f.resizes[1] != 2 {
+		t.Fatalf("resizes %v", f.resizes)
+	}
+	*now = now.Add(5 * time.Minute)
+	w.Tick(ctx)
+	if len(f.deleted) != 0 {
+		t.Fatalf("drained after traffic: %v", f.deleted)
 	}
 }

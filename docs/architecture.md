@@ -281,7 +281,7 @@ cluster is zonal, in `us-central1-a`.
 
 | Product | Used for | Created by | Notes |
 | --- | --- | --- | --- |
-| **Google Kubernetes Engine (Standard)** | Runs the web app, the Workbench server, PostgreSQL, Substrate, the agent sessions and the tool servers | `up.sh infra`, `up.sh resize` | Cluster `workbench-dev`: rapid channel, Workload Identity pool `<project>.svc.id.goog`, beta certificate APIs for Substrate. Autopilot cannot run Substrate's privileged node agent. After `resize`, two **Spot** node pools (§9): `system`, one `e2-medium` that is always on, and `workload`, 2 × `e2-standard-4`, which the waker pauses after an idle hour |
+| **Google Kubernetes Engine (Standard)** | Runs the web app, the Workbench server, PostgreSQL, Substrate, the agent sessions and the tool servers | `up.sh infra`, `up.sh resize` | Cluster `workbench-dev`: rapid channel, Workload Identity pool `<project>.svc.id.goog`, beta certificate APIs for Substrate. Autopilot cannot run Substrate's privileged node agent. After `resize`, two **Spot** node pools (§9): `always-on`, one `e2-standard-2`, and `workload`, 2 × `e2-standard-4`, which the waker pauses after an idle hour |
 | **Artifact Registry** | Docker images | `infra`, `tools` | `workbench` holds the platform images (server, web, mockllm, tool servers). `builds` holds the images of apps the builder builds, tagged by commit and deployed by digest |
 | **Cloud Build** | Builds the platform images (`deploy/gcp/cloudbuild.yaml`). Through build-mcp, also builds app images and runs app checks | `images`; build-mcp at run time | App builds run as the `workbench-builds` service account, log only to Cloud Logging, and are tagged `workbench` |
 | **Cloud Storage** | Deploy state; build source staging | workflow, `tools` | `<project>-workbench-state` holds the deploy state: generated secrets, exposure settings. `<project>-workbench-build-sources` holds one tarball per commit and deletes them after 7 days |
@@ -546,21 +546,32 @@ first sizing used about 3% of its CPU and 5% of its memory:
 
 `up.sh resize` replaces it with two Spot node pools.
 
-- **`system`** is one `e2-medium` that is always on. Its taint,
-  `components.gke.io/gke-managed-components=true:NoSchedule`, admits only
-  GKE's own pods (DNS, metrics) and the web pod. The web pod runs nginx with
-  the **waker** sidecar (`tools/cmd/waker`).
+- **`always-on`** is one `e2-standard-2`. It must hold GKE's own pods (DNS,
+  metrics) while the workload pool is at 0; an `e2-medium` was 96%
+  reserved. Its taint, `components.gke.io/gke-managed-components=true:NoSchedule`,
+  admits only GKE's own pods and the web pod, which finds the node by the
+  label `workbench.dev/always-on`. The web pod runs nginx with the
+  **waker** sidecar (`tools/cmd/waker`).
 - **`workload`** is 2 × `e2-standard-4` and runs everything else.
   - **Pausing.** nginx tells the waker about every API request. After an
     hour without one, the waker sets the pool's size to 0. Pods stay
     defined; PostgreSQL's data is on a persistent disk.
+  - **Finishing a pause.** GKE drains nodes gently and honours disruption
+    budgets for up to an hour. Substrate's `ate-api-server` and
+    `ate-idp-server` budgets can never be met once their pods have nowhere
+    to go. So if nodes remain two minutes after the resize, the waker
+    deletes the pods left on them (not DaemonSet or static pods). Deleting,
+    unlike evicting, does not wait for the budgets.
+  - **Traffic during a pause in progress** asks for the full size at once;
+    GKE accepts it as soon as the earlier resize ends.
   - **Starting.** The next API request reaches nginx while the server is
     unreachable. nginx hands it to the waker, which sets the size back to 2
     and answers `503` with `X-Workbench-Starting: 1`. The web app shows
     "Workbench is starting up" and reloads by itself when the server
     answers, about 3 to 5 minutes later.
-  - **Permissions.** The waker counts the pool's nodes through the
-    Kubernetes API (RBAC: list nodes). It resizes the pool through the GKE
+  - **Permissions.** The waker counts the pool's nodes and finishes drains
+    through the Kubernetes API (RBAC: list nodes; list and delete pods). It
+    reaches the API by address, so it works without cluster DNS. It resizes the pool through the GKE
     API as the `workbench-web` Kubernetes service account, which holds the
     custom role `workbenchNodePoolResizer` (get and update clusters) through
     Workload Identity.
