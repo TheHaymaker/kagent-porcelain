@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -42,7 +43,14 @@ func main() {
 	_ = fs.Parse(os.Args[1:])
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", name)
 
+	// The API server by address, as Kubernetes injects it: no DNS lookup, so
+	// the waker still works while the cluster DNS pods are rescheduling.
+	kubeURL := ""
+	if h, p := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT"); h != "" && p != "" {
+		kubeURL = "https://" + net.JoinHostPort(h, p)
+	}
 	cfg := waker.Config{
+		KubeURL: kubeURL,
 		Project: *project, Location: *location, Cluster: *cluster, Pool: *pool, Nodes: int(*nodes), Idle: *idle,
 		KubeToken: func() (string, error) {
 			b, err := os.ReadFile(saDir + "token") // rotated by the kubelet; read each time

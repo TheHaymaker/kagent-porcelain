@@ -130,6 +130,12 @@ func (w *Waker) resize(ctx context.Context, size int, why string) {
 		w.mu.Lock()
 		w.target = -1
 		w.mu.Unlock()
+		if strings.Contains(err.Error(), "incompatible operation") {
+			// GKE runs one operation at a time; the earlier resize (draining
+			// nodes) is still going. Not an error: try again later.
+			w.log.InfoContext(ctx, "resize waits for a running cluster operation", "pool", w.cfg.Pool, "size", size)
+			return
+		}
 		w.log.WarnContext(ctx, "resize node pool", "pool", w.cfg.Pool, "size", size, "error", err)
 		return
 	}
