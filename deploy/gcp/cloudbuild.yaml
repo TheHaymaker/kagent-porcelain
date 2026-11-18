@@ -41,6 +41,10 @@ steps:
     name: gcr.io/cloud-builders/docker
     args: [build, --build-arg, SERVER=bigquery-mcp, -t, "${_REGISTRY}/bigquery-mcp:${_TAG}", tools]
     waitFor: ["-"]
+  - id: waker
+    name: gcr.io/cloud-builders/docker
+    args: [build, --build-arg, SERVER=waker, -t, "${_REGISTRY}/waker:${_TAG}", tools]
+    waitFor: ["-"]
 images:
   - "${_REGISTRY}/workbench-server:${_TAG}"
   - "${_REGISTRY}/workbench-mockllm:${_TAG}"
@@ -50,3 +54,4 @@ images:
   - "${_REGISTRY}/artifactregistry-mcp:${_TAG}"
   - "${_REGISTRY}/bigquery-mcp:${_TAG}"
   - "${_REGISTRY}/build-mcp:${_TAG}"
+  - "${_REGISTRY}/waker:${_TAG}"

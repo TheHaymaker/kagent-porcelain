@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # One image per tool server, selected with --build-arg SERVER=<name>:
 #   docker build --build-arg SERVER=gitlab-mcp -t .../gitlab-mcp:TAG tools/
-# SERVER is one of: gitlab-mcp, cloudrun-mcp, artifactregistry-mcp, bigquery-mcp.
+# SERVER is one of the commands in cmd/ (the tool servers, and waker).
 ARG GO_VERSION=1.26
 
 FROM golang:${GO_VERSION} AS build
