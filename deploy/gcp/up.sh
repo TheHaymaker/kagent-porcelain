@@ -1151,8 +1151,12 @@ phase_resize() {
       --workload-metadata GKE_METADATA --node-taints "$SYSTEM_TAINT"
   fi
   if ! has_pool "$WORKLOAD_POOL"; then
+    # One node while the old pool still exists: both together can exceed the
+    # project's CPU quota. It grows to WORKLOAD_NODES once the old pool is gone.
+    local first=$WORKLOAD_NODES
+    has_pool default-pool && first=1
     gc container node-pools create "$WORKLOAD_POOL" --cluster "$CLUSTER" --zone "$ZONE" \
-      --machine-type e2-standard-4 --num-nodes "$WORKLOAD_NODES" --spot --disk-size 50 --disk-type pd-balanced \
+      --machine-type e2-standard-4 --num-nodes "$first" --spot --disk-size 50 --disk-type pd-balanced \
       --workload-metadata GKE_METADATA
   fi
   if has_pool default-pool; then
@@ -1165,6 +1169,12 @@ phase_resize() {
       kubectl drain "$n" --ignore-daemonsets --delete-emptydir-data --force --timeout 10m || true
     done
     gc container node-pools delete default-pool --cluster "$CLUSTER" --zone "$ZONE" --quiet
+  fi
+  local now
+  now=$(kubectl get nodes -l "cloud.google.com/gke-nodepool=$WORKLOAD_POOL" -o name | wc -l | tr -d ' ')
+  if (( now < WORKLOAD_NODES )); then
+    say "Growing $WORKLOAD_POOL to $WORKLOAD_NODES nodes"
+    resize_workload "$WORKLOAD_NODES"
   fi
 
   say "The waker's right to resize the workload pool"
