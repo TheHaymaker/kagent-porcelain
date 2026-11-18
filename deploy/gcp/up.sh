@@ -1205,6 +1205,13 @@ phase_status() {
   kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/name=workbench-web -o wide || true
   kubectl -n "$NAMESPACE" logs deploy/workbench-web -c waker --tail=20 2>/dev/null || echo "  (no waker container)"
   # Capacity: what the nodes cost for and what the pods reserve and use.
+  say "Disruption budgets (they can hold up draining a node)"
+  kubectl get pdb -A 2>/dev/null || true
+  say "Pending pods"
+  kubectl get pods -A --field-selector=status.phase=Pending 2>/dev/null || true
+  say "Running cluster operations"
+  gc container operations list --zone "$ZONE" --filter "status=RUNNING" \
+    --format 'table(name,operationType,targetLink.basename(),startTime)' 2>/dev/null || true
   say "Node pools"
   gc container node-pools list --cluster "$CLUSTER" --zone "$ZONE" \
     --format 'table(name,config.machineType,initialNodeCount,autoscaling.enabled,config.spot,config.preemptible)' || true
