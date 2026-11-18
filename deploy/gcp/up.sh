@@ -25,6 +25,11 @@
 #   up.sh builder    the Gemini builder agent and its planner, tester and reviewer helpers
 #   up.sh web-check  diagnose web sign-in: the /__/ handler proxy (read-only)
 #   up.sh tools-check  tool servers' recent failed calls, preview services (read-only)
+#   up.sh resize     move to Spot node pools: a small always-on "system" pool
+#                    (web app, waker, GKE's own pods) and a "workload" pool
+#                    the waker pauses after an idle hour (then run workbench
+#                    or expose, so the web app gets the waker)
+#   up.sh pause | resume   scale the workload pool to 0 / back by hand
 #   up.sh all        every phase in order
 #   up.sh status     what is running
 #   up.sh down       delete the cluster (the registry and images stay)
@@ -58,6 +63,18 @@ export GOTOOLCHAIN=auto
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+# retry runs a command up to eight times with growing pauses: new service
+# accounts and roles take a little while to be visible to IAM policy.
+retry() {
+  local try
+  mkdir -p "$STATE"
+  for try in 1 2 3 4 5 6 7 8; do
+    "$@" >/dev/null 2>"$STATE/iam.err" && { rm -f "$STATE/iam.err"; return 0; }
+    sleep $((try * 5))
+  done
+  cat "$STATE/iam.err" >&2
+  die "failed after retries: $*"
+}
 need() { command -v "$1" >/dev/null || die "$1 is not installed${2:+ ($2)}"; }
 
 gc() { gcloud --project "$PROJECT_ID" --quiet "$@"; }
@@ -266,6 +283,7 @@ kagent: {release: kagent, fullname: kagent}
 web:
   image: $REGISTRY/workbench-web:$TAG
 $(web_values)
+$(waker_values)
 config:
 $(identity_values)
     internalKeyFile: /var/run/secrets/workbench/internal-key
@@ -545,6 +563,34 @@ fi)
       # The app's own host: nginx proxies the sign-in handler at /__/.
       authDomain: $EXPOSE_HOST
       projectId: $PROJECT_ID
+W
+}
+
+# Node pools after up.sh resize: the web app and the waker live on the small
+# always-on pool; everything else on the workload pool the waker pauses.
+SYSTEM_POOL=system
+WORKLOAD_POOL=workload
+WORKLOAD_NODES=${WORKLOAD_NODES:-2}
+IDLE_PAUSE=${IDLE_PAUSE:-1h}
+SYSTEM_TAINT=components.gke.io/gke-managed-components=true:NoSchedule
+
+has_pool() { gc container node-pools describe "$1" --cluster "$CLUSTER" --zone "$ZONE" >/dev/null 2>&1; }
+
+waker_values() {
+  has_pool "$SYSTEM_POOL" && has_pool "$WORKLOAD_POOL" || return 0
+  cat <<W
+  nodeSelector: {cloud.google.com/gke-nodepool: $SYSTEM_POOL}
+  tolerations:
+    - {key: components.gke.io/gke-managed-components, operator: Equal, value: "true", effect: NoSchedule}
+  waker:
+    enabled: true
+    image: $REGISTRY/waker:$TAG
+    project: $PROJECT_ID
+    location: $ZONE
+    cluster: $CLUSTER
+    pool: $WORKLOAD_POOL
+    nodes: $WORKLOAD_NODES
+    idle: $IDLE_PAUSE
 W
 }
 
@@ -863,16 +909,6 @@ phase_tools() {
   echo "  builds repository, staging bucket (7-day lifecycle), build and preview service accounts"
 
   say "Roles (Workload Identity for the tool servers)"
-  # New service accounts take a little while to be visible to IAM policy.
-  retry() {
-    local try
-    for try in 1 2 3 4 5 6 7 8; do
-      "$@" >/dev/null 2>"$STATE/iam.err" && { rm -f "$STATE/iam.err"; return 0; }
-      sleep $((try * 5))
-    done
-    cat "$STATE/iam.err" >&2
-    die "failed after retries: $*"
-  }
   grant_project() { retry gc projects add-iam-policy-binding "$PROJECT_ID" --member "$1" --role "$2" --condition None; }
   grant_project "serviceAccount:$build_sa" roles/logging.logWriter
   retry gc artifacts repositories add-iam-policy-binding builds --location "$REGION" \
@@ -1101,6 +1137,56 @@ for e in entries:
   done
 }
 
+# phase_resize moves the cluster to two Spot node pools and lets the web
+# app's waker resize the workload pool. Idempotent; the old default pool is
+# drained (pods move to the new pools) and deleted.
+phase_resize() {
+  kubeconfig
+  say "Node pools: $SYSTEM_POOL (always on) and $WORKLOAD_POOL (paused when idle), both Spot"
+  if ! has_pool "$SYSTEM_POOL"; then
+    # GKE's own pods (DNS, metrics) tolerate this taint; ours do not, except
+    # the web app, so only they run here and it stays small.
+    gc container node-pools create "$SYSTEM_POOL" --cluster "$CLUSTER" --zone "$ZONE" \
+      --machine-type e2-medium --num-nodes 1 --spot --disk-size 30 --disk-type pd-balanced \
+      --workload-metadata GKE_METADATA --node-taints "$SYSTEM_TAINT"
+  fi
+  if ! has_pool "$WORKLOAD_POOL"; then
+    gc container node-pools create "$WORKLOAD_POOL" --cluster "$CLUSTER" --zone "$ZONE" \
+      --machine-type e2-standard-4 --num-nodes "$WORKLOAD_NODES" --spot --disk-size 50 --disk-type pd-balanced \
+      --workload-metadata GKE_METADATA
+  fi
+  if has_pool default-pool; then
+    say "Moving pods off the old default pool"
+    local n
+    for n in $(kubectl get nodes -l cloud.google.com/gke-nodepool=default-pool -o name); do
+      kubectl cordon "$n"
+    done
+    for n in $(kubectl get nodes -l cloud.google.com/gke-nodepool=default-pool -o name); do
+      kubectl drain "$n" --ignore-daemonsets --delete-emptydir-data --force --timeout 10m || true
+    done
+    gc container node-pools delete default-pool --cluster "$CLUSTER" --zone "$ZONE" --quiet
+  fi
+
+  say "The waker's right to resize the workload pool"
+  local number role="projects/$PROJECT_ID/roles/workbenchNodePoolResizer"
+  number=$(gc projects describe "$PROJECT_ID" --format 'value(projectNumber)')
+  gc iam roles describe workbenchNodePoolResizer --project "$PROJECT_ID" >/dev/null 2>&1 ||
+    gc iam roles create workbenchNodePoolResizer --project "$PROJECT_ID" --title "Workbench node pool resizer" \
+      --description "Pause and start Workbench's workload node pool" \
+      --permissions container.clusters.get,container.clusters.update,container.operations.get >/dev/null
+  retry gc projects add-iam-policy-binding "$PROJECT_ID" --condition None --role "$role" \
+    --member "principal://iam.googleapis.com/projects/$number/locations/global/workloadIdentityPools/$PROJECT_ID.svc.id.goog/subject/ns/$NAMESPACE/sa/workbench-web" >/dev/null
+  kubectl get nodes -L cloud.google.com/gke-nodepool
+  echo "Now run up.sh expose (or workbench) so the web app moves to $SYSTEM_POOL with the waker."
+}
+
+phase_pause() { resize_workload 0; }
+phase_resume() { resize_workload "$WORKLOAD_NODES"; }
+resize_workload() {
+  has_pool "$WORKLOAD_POOL" || die "no $WORKLOAD_POOL pool; run up.sh resize first"
+  gc container clusters resize "$CLUSTER" --zone "$ZONE" --node-pool "$WORKLOAD_POOL" --num-nodes "$1" --quiet
+}
+
 phase_status() {
   kubeconfig
   kubectl -n "$NAMESPACE" get pods,svc
@@ -1165,6 +1251,9 @@ case ${1:-} in
   expose) phase_check; phase_expose ;;
   unexpose) phase_check; phase_unexpose ;;
   all) phase_check; phase_infra; phase_images; phase_kagent; phase_workbench; phase_smoke ;;
+  resize) phase_check; phase_resize ;;
+  pause) phase_pause ;;
+  resume) phase_resume ;;
   status) phase_status ;;
   down) phase_down ;;
   *) sed -n '2,37p' "$0"; exit 2 ;;

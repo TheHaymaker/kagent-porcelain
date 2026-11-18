@@ -14,7 +14,8 @@ metadata:
   labels:
     app.kubernetes.io/name: workbench-web
 spec:
-  replicas: {{ .Values.web.replicas }}
+  # One replica with the waker: each would otherwise keep its own idle clock.
+  replicas: {{ if .Values.web.waker.enabled }}1{{ else }}{{ .Values.web.replicas }}{{ end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: workbench-web
@@ -25,10 +26,41 @@ spec:
       annotations:
         checksum/config: {{ toJson .Values.web.runtimeConfig | sha256sum }}
     spec:
+      {{- if .Values.web.waker.enabled }}
+      serviceAccountName: workbench-web
+      {{- end }}
+      {{- with .Values.web.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.web.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 101
       containers:
+        {{- with .Values.web.waker }}
+        {{- if .enabled }}
+        # Pauses the workload node pool when idle; starts it on traffic.
+        - name: waker
+          image: {{ .image }}
+          env:
+            - { name: WAKER_PROJECT, value: {{ .project | quote }} }
+            - { name: WAKER_LOCATION, value: {{ .location | quote }} }
+            - { name: WAKER_CLUSTER, value: {{ .cluster | quote }} }
+            - { name: WAKER_POOL, value: {{ .pool | quote }} }
+            - { name: WAKER_NODES, value: {{ .nodes | quote }} }
+            - { name: WAKER_IDLE, value: {{ .idle | quote }} }
+          securityContext:
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }
+        {{- end }}
+        {{- end }}
         - name: web
           image: {{ .Values.web.image }}
           ports:
@@ -37,6 +69,14 @@ spec:
             # nginx proxies /api to the Workbench server, same origin as the app.
             - name: API_UPSTREAM
               value: http://{{ .Values.kagent.fullname }}-controller.{{ .Release.Namespace }}.svc:8083
+            {{- if .Values.web.waker.enabled }}
+            # nginx tells the waker about API traffic, and sends it API
+            # requests the paused server cannot answer (web/nginx template).
+            - name: WAKER_ACTIVITY
+              value: "proxy_pass http://127.0.0.1:8081/activity;"
+            - name: WAKER_STARTING
+              value: "rewrite ^ /starting break; proxy_pass http://127.0.0.1:8081;"
+            {{- end }}
             {{- with .Values.web.authHandlerUpstream }}
             # Identity Platform's sign-in handler, proxied at /__/ (ADR 0005).
             - name: AUTH_HANDLER_UPSTREAM
@@ -69,6 +109,32 @@ spec:
           emptyDir: {}
         - name: tmp
           emptyDir: {}
+{{- if .Values.web.waker.enabled }}
+---
+# The waker counts the workload pool's nodes and resizes it (through Workload
+# Identity: the Google role is granted to this account by deploy/gcp/up.sh).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workbench-web
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: workbench-waker
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: workbench-waker
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: workbench-waker}
+subjects:
+  - {kind: ServiceAccount, name: workbench-web, namespace: {{ .Release.Namespace }}}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service

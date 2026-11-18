@@ -38,3 +38,18 @@ web:
   # https://<project>.firebaseapp.com when the web app signs in with Identity
   # Platform: nginx serves its handler at /__/ on the app's own host.
   authHandlerUpstream: ""
+  # Pods' placement, e.g. the small always-on node pool when the waker is on.
+  nodeSelector: {}
+  tolerations: []
+  # Pause the workload node pool after an idle period and start it on the next
+  # request (tools/internal/waker). Runs beside nginx; needs a Kubernetes
+  # service account with Workload Identity rights to resize the pool.
+  waker:
+    enabled: false
+    image: ""
+    project: ""
+    location: ""
+    cluster: ""
+    pool: workload
+    nodes: 2
+    idle: 1h
