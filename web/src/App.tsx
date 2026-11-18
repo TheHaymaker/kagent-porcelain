@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
+import { StartingBanner } from "./layout/StartingBanner";
 import { AuthCallback, SignIn } from "./auth/SignIn";
 import { AppShell } from "./layout/AppShell";
 import { ToastProvider } from "./ui/Toast";
@@ -44,6 +45,7 @@ export function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
+        <StartingBanner />
         <AuthProvider>
           <Routes>
             <Route path="/auth/callback" element={<AuthCallback />} />

@@ -30,6 +30,7 @@ import type {
   MessageInitShape,
 } from "@bufbuild/protobuf";
 import { A2AService } from "@/gen/a2a_pb";
+import { isStartingError, markStarting } from "./starting";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -59,7 +60,17 @@ const a2aVersionInterceptor: Interceptor = (next) => (request) => {
   return next(request);
 };
 
-const INTERCEPTORS: Interceptor[] = [authInterceptor, a2aVersionInterceptor];
+/** Notices the "Workbench is starting" answer of a paused cluster (api/starting.ts). */
+const startingInterceptor: Interceptor = (next) => async (request) => {
+  try {
+    return await next(request);
+  } catch (err) {
+    if (isStartingError(err)) markStarting();
+    throw err;
+  }
+};
+
+const INTERCEPTORS: Interceptor[] = [startingInterceptor, authInterceptor, a2aVersionInterceptor];
 
 type CallFn = (request: UnaryRequest | StreamRequest) => Promise<UnaryResponse | StreamResponse>;
 

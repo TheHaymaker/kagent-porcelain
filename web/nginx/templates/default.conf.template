@@ -31,6 +31,26 @@ server {
         proxy_read_timeout 1h;
         proxy_send_timeout 1h;
         client_max_body_size 20m;
+        # Every API request counts as activity for the waker, which pauses the
+        # cluster's workload nodes after an idle hour (WAKER_ACTIVITY; without
+        # the waker it answers 204 here).
+        mirror /__waker/activity;
+        mirror_request_body off;
+        # The server cannot be reached (its nodes are paused or starting):
+        # the waker starts them and answers 503 with a message the app shows.
+        proxy_connect_timeout 5s;
+        error_page 502 504 = @starting;
+    }
+
+    location = /__waker/activity {
+        internal;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        ${WAKER_ACTIVITY}
+    }
+
+    location @starting {
+        ${WAKER_STARTING}
     }
 
     # Google Identity Platform's sign-in handler, served from this host so the

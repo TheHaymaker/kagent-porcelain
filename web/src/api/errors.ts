@@ -1,7 +1,10 @@
 import { Code, ConnectError } from "@connectrpc/connect";
+import { isStartingError } from "./starting";
 
 /** A sentence a non-engineer can act on, for any failed call. */
 export function friendlyError(error: unknown): string {
+  if (isStartingError(error))
+    return "Workbench is starting up after a quiet spell. This takes about 3 to 5 minutes; the page will continue on its own.";
   if (error instanceof ConnectError) {
     switch (error.code) {
       case Code.Unauthenticated:
